@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setApiEnabledForTests } from "../src/client/ApiBase";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 vi.mock("../src/core/game/UserSettings", () => ({
   UserSettings: { setPlayerId: vi.fn() },

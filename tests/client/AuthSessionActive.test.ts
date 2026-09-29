@@ -1,6 +1,6 @@
 import { base64url } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getApiBase } from "../../src/client/ApiBase";
+import { getApiBase, setApiEnabledForTests } from "../../src/client/ApiBase";
 import {
   clearLocalSession,
   isSessionActive,
@@ -9,6 +9,10 @@ import {
 import { ClientEnv } from "../../src/client/ClientEnv";
 import { TokenPayloadSchema } from "../../src/core/ApiSchemas";
 import { uuidToBase64url } from "../../src/core/Base64";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 // The real Auth module, deliberately: isSessionActive reads the JWT held in
 // that module's own state, so a mocked Auth can only ever return whatever the

@@ -1,5 +1,6 @@
 import { UnsecuredJWT } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
 import {
   discordLogin,
   googleLogin,
@@ -8,6 +9,10 @@ import {
 } from "../../src/client/Auth";
 import { ClientEnv } from "../../src/client/ClientEnv";
 import { showInGameAlert } from "../../src/client/InGameModal";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 vi.mock("../../src/client/InGameModal", () => ({
   showInGameAlert: vi.fn(async () => undefined),

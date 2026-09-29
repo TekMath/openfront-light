@@ -4,6 +4,7 @@ import { z } from "zod";
 import { TokenPayload, TokenPayloadSchema } from "../core/ApiSchemas";
 import { base64urlToUuid } from "../core/Base64";
 import { getApiBase, getAudience } from "./Api";
+import { apiEnabled } from "./ApiBase";
 import { ClientEnv } from "./ClientEnv";
 import { crazyGamesSDK } from "./CrazyGamesSDK";
 import type { DesktopSessionState, SessionFailureKind } from "./DesktopShell";
@@ -387,6 +388,9 @@ export async function userAuth(
   try {
     const jwt = __jwt;
     if (!jwt) {
+      // openfront-light: no API, so no session to find or refresh. Answer
+      // "signed out" quietly instead of failing a refresh and warning.
+      if (!apiEnabled()) return false;
       if (!shouldRefresh) {
         console.warn("No JWT found and shouldRefresh is false");
         return false;

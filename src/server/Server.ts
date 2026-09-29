@@ -4,7 +4,9 @@ import { startMaster } from "./Master";
 import { startWorker } from "./Worker";
 
 // Load environment variables before we read configuration values derived from them.
-dotenv.config();
+// openfront-light: quiet, so dotenv does not print its "injected env (0)
+// from .env, tip: ..." banner once per process (master + every worker).
+dotenv.config({ quiet: true });
 
 // Main entry point of the application
 async function main() {

@@ -10,7 +10,9 @@ import { ServerEnv } from "./ServerEnv";
 import { SingleplayerPresence } from "./SingleplayerPresence";
 import { WorkerLobbyService } from "./WorkerLobbyService";
 
-dotenv.config();
+// openfront-light: quiet, so dotenv does not print its "injected env (0)
+// from .env, tip: ..." banner once per process (master + every worker).
+dotenv.config({ quiet: true });
 
 export function initWorkerMetrics(
   gameManager: GameManager,

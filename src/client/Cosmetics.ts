@@ -34,6 +34,7 @@ import {
   purchaseCosmeticPack,
   purchaseWithCurrency,
 } from "./Api";
+import { apiEnabled } from "./ApiBase";
 import { showInGameAlert, showInGameConfirm } from "./InGameModal";
 import {
   classifyPurchaseReturn,
@@ -817,6 +818,10 @@ export function invalidateCosmetics(): void {
 }
 
 export async function fetchCosmetics(): Promise<Cosmetics | null> {
+  // openfront-light: the catalog is served by the closed-source API. Without
+  // it every call failed and warned "Error getting cosmetics"; null is what
+  // callers already get on a failed fetch.
+  if (!apiEnabled()) return null;
   if (__cosmetics !== null) {
     return __cosmetics;
   }

@@ -155,7 +155,8 @@ describe("RenderDesktopDescriptor CLI", () => {
     expect(result.stdout.startsWith("{")).toBe(true);
     expect(result.stdout.trimEnd().endsWith("}")).toBe(true);
     expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(result.stderr).toContain("remote logging disabled");
+    // openfront-light removed Logger.ts's "remote logging disabled" line and
+    // quieted dotenv, so the winston warning below is the noise checked here.
     // The winston warning buildDescriptor emits for an empty cdnBase.
     expect(result.stderr).toContain("CDN_BASE is unset");
   });

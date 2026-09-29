@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserMe } from "../../src/client/Api";
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
 import {
   getPlayerCosmeticsRefs,
   invalidateCosmetics,
 } from "../../src/client/Cosmetics";
 import type { UserMeResponse } from "../../src/core/ApiSchemas";
 import { FLAG_KEY, UserSettings } from "../../src/core/game/UserSettings";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 vi.mock("../../src/client/Api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/Api")>()),

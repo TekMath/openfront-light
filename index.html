@@ -109,6 +109,11 @@
         "--mobile-logo-image-url",
         `url("<%- mobileLogoImageUrl %>")`,
       );
+      // openfront-light: silence only Lit's "Lit is in dev mode" notice,
+      // which `npm run dev` otherwise relays to the terminal on every load.
+      // Must run before Lit loads; Lit's other dev warnings still show, and
+      // production builds do not use this at all.
+      (globalThis.litIssuedWarnings ??= new Set()).add("dev-mode");
     </script>
 
     <!-- CrazyGames SDK -->

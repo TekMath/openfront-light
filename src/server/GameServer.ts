@@ -54,7 +54,6 @@ import {
 } from "../core/Schemas";
 import { createPartialGameRecord } from "../core/Util";
 import { createGameWireContext, encodeServerMessage } from "../core/ZbinWire";
-import { archive, finalizeGameRecord } from "./Archive";
 import { Client } from "./Client";
 import { applyGameConfigPatch, hostCheatsEnabled } from "./ConfigPatch";
 import { LiveStatsVote, WinnerVote } from "./Consensus";
@@ -166,7 +165,10 @@ function mintGroupToken(): string {
 
 export function defaultGameServerDeps(): GameServerDeps {
   return {
-    archive: (record) => archive(finalizeGameRecord(record)),
+    // openfront-light: finished games are not archived. The archive is the
+    // closed-source API (POST /game/:id); without it every game end logged
+    // "error archiving game record". Upstream: archive(finalizeGameRecord(r)).
+    archive: async () => {},
     fetchTribes: fetchCustomTribes,
     env: () => ServerEnv.env(),
     turnIntervalMs: () => ServerEnv.turnIntervalMs(),

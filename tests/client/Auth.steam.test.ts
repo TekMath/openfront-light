@@ -1,5 +1,6 @@
 import { UnsecuredJWT } from "jose";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
 import {
   getAuthHeader,
   getDesktopSessionState,
@@ -10,6 +11,10 @@ import { ClientEnv } from "../../src/client/ClientEnv";
 import { subscribeDesktopSessionRecovery } from "../../src/client/DesktopSessionRecovery";
 import { multiplayerAllowedForSession } from "../../src/client/DesktopShell";
 import { steamSDK, type SteamTicketFailure } from "../../src/client/SteamSDK";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 function setBootstrapConfig() {
   (window as any).BOOTSTRAP_CONFIG = {

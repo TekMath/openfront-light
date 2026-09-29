@@ -38,10 +38,8 @@ import { payForLobbyQueue, queueListedLobby } from "./LobbyQueuePayment";
 import { logger } from "./Logger";
 import { resolveVerifiedJoin } from "./Privilege";
 
-import { MapPlaylist } from "./MapPlaylist";
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { PrivilegeRefresher } from "./PrivilegeRefresher";
-import { startRankedCheckinLoops } from "./RankedCheckin";
 import { rejoinOrClose } from "./Rejoin";
 import { ServerEnv } from "./ServerEnv";
 import { SingleplayerPresence } from "./SingleplayerPresence";
@@ -54,7 +52,6 @@ import { stripWorkerPrefix } from "./WorkerPathPrefix";
 
 const workerId = ServerEnv.workerId() ?? 0;
 const log = logger.child({ comp: `w_${workerId}` });
-const playlist = new MapPlaylist();
 
 // Worker setup
 export async function startWorker() {
@@ -87,21 +84,10 @@ export async function startWorker() {
   const lobbyService = new WorkerLobbyService(server, wss, gm, log);
   const singleplayerPresence = new SingleplayerPresence();
 
-  setTimeout(
-    () => {
-      // The ranked loop follows the deployment-active flag the master pushes
-      // to this worker (OPE-469): a draining, standby or fenced server keeps
-      // the games it has but stops offering new matches.
-      startRankedCheckinLoops({
-        gm,
-        playlist,
-        workerId,
-        log,
-        isActive: () => lobbyService.isDeploymentActive(),
-      });
-    },
-    1000 + Math.random() * 2000,
-  );
+  // openfront-light: no ranked check-in loops (startRankedCheckinLoops).
+  // Ranked matchmaking lives in the closed-source API; without it each loop
+  // logged "Error polling 1v1/2v2 lobby: fetch failed" every few seconds, on
+  // every worker.
 
   if (ServerEnv.otelEnabled()) {
     initWorkerMetrics(gm, lobbyService, singleplayerPresence);
@@ -113,7 +99,10 @@ export async function startWorker() {
     ServerEnv.jwtIssuer() + "/reserved_clan_tags",
     log,
   );
-  privilegeRefresher.start();
+  // openfront-light: never start()ed. The refresher fetches cosmetics.json
+  // and the reserved clan tags from the closed-source API, so it only ever
+  // failed and logged it every 3 minutes. Unstarted, get() answers with the
+  // fail-open checker, which is what the failing refresher served anyway.
 
   // Ahead of everything that can reject a request — the worker-prefix check
   // below and the rate limiter further down — so that a 404 or a 429 still

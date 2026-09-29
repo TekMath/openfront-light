@@ -43,6 +43,7 @@ import {
   getUserMe,
   invalidateUserMe,
 } from "../../src/client/Api";
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
 import type { ResolvedCosmetic } from "../../src/client/Cosmetics";
 import {
   invalidateCosmetics,
@@ -56,6 +57,10 @@ import {
 import { startPurchase } from "../../src/client/Payments";
 import { translateText } from "../../src/client/Utils";
 import type { Cosmetics, Subscription } from "../../src/core/CosmeticSchemas";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 const startPurchaseMock = startPurchase as unknown as ReturnType<typeof vi.fn>;
 const alertMock = showInGameAlert as unknown as ReturnType<typeof vi.fn>;

@@ -61,9 +61,20 @@ Guidelines for light changes:
 - In dev, Vite's `publicDir` is `resources/`, and the client deliberately imports files from it as modules through the `resources` alias (atlas metadata, `lang/en.json`, `version.txt`, `QuickChat.json`, `countries.json`, ...). Vite printed "Assets in public directory cannot be imported from JavaScript" for each one on every `npm run dev`.
 - `vite.config.ts` sets a `customLogger` (`quietResourcesImportWarnings`) that drops only that warning, and only for paths under `/resources/`. All other Vite output is unchanged.
 
+#### 6. No calls to the closed-source API, and no log noise about it
+
+Every background call to the absent API failed and logged, on every start or every few seconds. The calls are now skipped, not just silenced:
+
+- **Server** (`src/server/Worker.ts`): the ranked check-in loops (`startRankedCheckinLoops`, "Error polling 1v1/2v2 lobby") are no longer started, and the `PrivilegeRefresher` (`cosmetics.json` + `reserved_clan_tags`) is never `start()`ed, so `get()` answers with the fail-open checker, as it did when the fetch failed. The now-unused worker `MapPlaylist` is removed.
+- **Server** (`src/server/GameServer.ts`): `defaultGameServerDeps().archive` is a no-op. Finished games are not POSTed to the API archive ("error archiving game record").
+- **Client** (`src/client/ApiBase.ts`): new `apiEnabled()` switch, `false` in the light build. `userAuth()` (`src/client/Auth.ts`) answers "signed out" without trying `/auth/refresh`, and `fetchCosmetics()` (`src/client/Cosmetics.ts`) returns `null` without fetching. That removes the relayed "Refresh failed", "No JWT found and shouldRefresh is false" and "Error getting cosmetics" warnings. `setApiEnabledForTests(true)` restores the upstream path in the suites written against it (Auth*, Cosmetic*, `AuthLogoutAnnounce`, `GrantedSubscriptionPurchase`, `InventoryRetryCache`). The light default is covered by `tests/client/ApiDisabledLight.test.ts`.
+- **Startup noise**: `dotenv.config({ quiet: true })` in `Server.ts`, `Logger.ts` and `WorkerMetrics.ts` (no more "injected env ... tip: ..." banner per process), no "No OTLP endpoint ..., remote logging disabled" line in `Logger.ts` (the normal state here; "OTEL enabled" is still printed when it is on), and `index.html` adds `dev-mode` to `globalThis.litIssuedWarnings` so Lit's "Lit is in dev mode" notice is not relayed to the terminal (Lit's other dev warnings still show). `tests/RenderDesktopDescriptor.test.ts` no longer expects the OTLP line.
+- Deliberately kept: Vite's `ws proxy error: ECONNREFUSED`, which can appear once when the browser connects in the ~2 s before the game server's workers listen. It is a real proxy error and would also report a crashed server.
+
 #### Known remaining upstream behaviour
 
-- The server still logs `ECONNREFUSED` / "Failed to fetch http://localhost:8787/..." errors (privilege refresher, ranked 1v1 / 2v2 polling) because the closed-source API is absent. They are harmless.
+- Other API-backed features (store, clans, account pages, ...) still call the API when a player opens them through a `#modal=` deep link; they are not linked from the menu (see 3).
+- `npm warn Unknown project config "allow-remote"` (and `allow-file`, `allow-directory`) comes from running npm 11: those `.npmrc` keys exist in npm 12, which the repo requires.
 - `tests/DeployIdentity.test.ts > refuses letter "C"` fails on macOS on upstream `HEAD` too (unrelated to the light changes).
 
 ## What this project is

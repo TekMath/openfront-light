@@ -4,7 +4,12 @@ vi.mock("../../src/client/ClientEnv", () => ({
   ClientEnv: { jwtAudience: () => "localhost" },
 }));
 
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
 import { userAuth } from "../../src/client/Auth";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 // Only a 401 from /auth/refresh means the session is dead. A 5xx (a database
 // or Hyperdrive blip), a 429 or an edge 403 is transient: logging out on it

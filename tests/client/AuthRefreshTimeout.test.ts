@@ -4,7 +4,12 @@ vi.mock("../../src/client/ClientEnv", () => ({
   ClientEnv: { jwtAudience: () => "localhost" },
 }));
 
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
 import { userAuth } from "../../src/client/Auth";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
 
 // The bound Auth.ts already applies to /auth/steam (see doSteamLogin).
 const AUTH_FETCH_TIMEOUT_MS = 10_000;
