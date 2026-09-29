@@ -55,8 +55,9 @@ describe("play-page mobile top bar", () => {
   describe("off CrazyGames", () => {
     beforeEach(mount);
 
-    it("puts the bell/help icons beside the profile menu", () => {
-      expect(rightSlot()).toEqual(["nav-utility-icons", "nav-account-menu"]);
+    // openfront-light: no profile/login menu.
+    it("puts only the bell/help/settings icons in the right slot", () => {
+      expect(rightSlot()).toEqual(["nav-utility-icons"]);
     });
   });
 
@@ -66,11 +67,8 @@ describe("play-page mobile top bar", () => {
       await mount();
     });
 
-    it("renders the same controls — the menu covers their sign-in too", () => {
-      // News and Help left the hamburger, so the icons have to be here for
-      // CrazyGames players; the profile menu's own "Sign in" item hands off to
-      // their SDK prompt, so no platform-specific button is needed.
-      expect(rightSlot()).toEqual(["nav-utility-icons", "nav-account-menu"]);
+    it("renders the same controls", () => {
+      expect(rightSlot()).toEqual(["nav-utility-icons"]);
     });
   });
 });

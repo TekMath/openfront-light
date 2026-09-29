@@ -32,20 +32,22 @@ async function mount<T extends LitElement>(element: T): Promise<T> {
 afterEach(() => document.body.replaceChildren());
 
 describe("Inventory navigation", () => {
-  it("renders Inventory in desktop and mobile navigation", async () => {
+  // openfront-light: the nav no longer links to pages backed by the
+  // closed-source API.
+  it("does not link Store, Inventory, Leaderboard or Clans from the nav", async () => {
     const desktop = await mount(new DesktopNavBar());
     const mobile = await mount(new MobileNavBar());
-    expect(
-      desktop.querySelector(
-        '[data-page="page-inventory"][data-i18n="main.inventory"]',
-      ),
-    ).toBeTruthy();
-    expect(mobile.querySelector('[data-page="page-inventory"]')).toBeTruthy();
-    expect(
-      mobile.querySelector(
-        '[data-page="page-inventory"] [data-i18n="main.inventory"], [data-page="page-inventory"][data-i18n="main.inventory"]',
-      ),
-    ).toBeTruthy();
+    for (const page of [
+      "page-item-store",
+      "page-inventory",
+      "page-leaderboard",
+      "page-clan",
+      "page-account",
+    ]) {
+      expect(desktop.querySelector(`[data-page="${page}"]`)).toBeNull();
+      expect(mobile.querySelector(`[data-page="${page}"]`)).toBeNull();
+    }
+    expect(desktop.querySelector("nav-account-menu")).toBeNull();
   });
 
   it("removes cosmetic and flag selectors from the play page", async () => {
@@ -93,23 +95,24 @@ describe("Inventory navigation", () => {
       loadFailed: false,
     });
     document.body.appendChild(inventory);
-    const desktop = await mount(new DesktopNavBar());
+    // The nav bars no longer carry an Inventory link (openfront-light), so
+    // route through a stand-in nav item the delegated router still handles.
+    const link = document.createElement("button");
+    link.className = "nav-menu-item";
+    link.dataset.page = "page-inventory";
+    document.body.appendChild(link);
     modalRouter.register("inventory", {
       tag: "inventory-modal",
       pageId: "page-inventory",
     });
     initNavigation();
 
-    desktop.querySelector<HTMLElement>('[data-page="page-inventory"]')!.click();
+    link.click();
 
     await vi.waitFor(() => {
       expect(window.location.hash).toBe("#modal=inventory&tab=skins");
     });
-    expect(
-      desktop
-        .querySelector<HTMLElement>('[data-page="page-inventory"]')!
-        .classList.contains("active"),
-    ).toBe(true);
+    expect(link.classList.contains("active")).toBe(true);
 
     inventory.setActiveTab("effects");
     expect(window.location.hash).toBe("#modal=inventory&tab=effects");

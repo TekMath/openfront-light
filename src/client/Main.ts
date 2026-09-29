@@ -17,8 +17,6 @@ import { GameEnv } from "../core/configuration/Config";
 import { UserSettings } from "../core/game/UserSettings";
 import "./AccountModal";
 import "./AccountSettingsModal";
-import { adGatekeeper } from "./AdGatekeeper";
-import { loadAdmiral, onAdmiralMeasured } from "./Admiral";
 import { getUserMe, invalidateUserMe } from "./Api";
 import {
   getDesktopSessionState,
@@ -59,7 +57,6 @@ import {
   isDesktopShell,
   type DesktopUpdateState,
 } from "./DesktopShell";
-import "./FeaturedStream";
 import "./GameModeSelector";
 import {
   GameModeSelector,
@@ -70,7 +67,6 @@ import {
 import { GameStartingModal } from "./GameStartingModal";
 import "./GameStatsModal";
 import { HelpModal } from "./HelpModal";
-import "./HomepagePromos";
 import { HostLobbyModal as HostPrivateLobbyModal } from "./HostLobbyModal";
 import { showInGameAlert, showInGameConfirm } from "./InGameModal";
 import "./InventoryModal";
@@ -188,44 +184,6 @@ declare global {
     turnstile?: TurnstileApi;
     adsEnabled: boolean;
     gtag?: (...args: any[]) => void;
-    PageOS: {
-      session: {
-        newPageView: () => void;
-      };
-    };
-    ramp: {
-      que: Array<() => void>;
-      passiveMode: boolean;
-      spaAddAds: (ads: Array<{ type: string; selectorId?: string }>) => void;
-      destroyUnits: (adType: string | string[]) => Promise<void>;
-      settings?: {
-        slots?: any;
-      };
-      spaNewPage: (url?: string) => void;
-      spaAds: (config?: {
-        ads?: Array<{ type: string; selectorId?: string }>;
-        countPageview?: boolean;
-        path?: string;
-      }) => void;
-      // Video ad methods
-      onPlayerReady: (() => void) | null;
-      addUnits: (units: Array<{ type: string }>) => Promise<void>;
-      displayUnits: () => void;
-    };
-    Bolt: {
-      on: (unitType: string, event: string, callback: () => void) => void;
-      BOLT_AD_REQUEST_START: string;
-      BOLT_AD_IMPRESSION: string;
-      BOLT_AD_STARTED: string;
-      BOLT_FIRST_QUARTILE: string;
-      BOLT_MIDPOINT: string;
-      BOLT_THIRD_QUARTILE: string;
-      BOLT_AD_COMPLETE: string;
-      BOLT_AD_ERROR: string;
-      BOLT_AD_PAUSED: string;
-      BOLT_AD_CLICKED: string;
-      SHOW_HIDDEN_CONTAINER: string;
-    };
     currentPageId?: string;
     showPage?: (pageId: string) => void;
   }
@@ -679,26 +637,11 @@ class Client {
       } else {
         updateAccountNavButton(userMeResponse);
       }
-      const isAdFree =
-        userMeResponse !== false && userMeResponse.player?.adfree === true;
-      window.adsEnabled =
-        !isAdFree && !crazyGamesSDK.isOnCrazyGames() && !isDesktopShell();
-      // Ad-eligible users only: paid/adfree users must never load Admiral (its
-      // adblock popup fires autonomously once the payload runs). Start watching
-      // adblock state; once a blocker is ever detected the in-game ad is
-      // suppressed forever (persisted) — those users are highly ad-sensitive.
-      if (window.adsEnabled) {
-        loadAdmiral();
-        // Admiral's read is more reliable than our DOM bait, so use it as a
-        // fast initial signal. A blocker that whitelists this site still shows
-        // ads, so "blocked" means adblocking AND not whitelisted.
-        onAdmiralMeasured((res) => {
-          adGatekeeper.seed(
-            res.adblocking === true && res.whitelisted !== true,
-          );
-        });
-        adGatekeeper.start();
-      }
+      // openfront-light: no ads anywhere. The ad scripts (Playwire, Admiral,
+      // Google Ad Manager) and the promo components are removed; the flag
+      // stays so any code that still reads it treats every player as
+      // ad-free.
+      window.adsEnabled = false;
       // Before the dispatch: <username-input> reads this store when it picks
       // the lapse notice's wording, and the record has to be current by then.
       const grantStoreBefore = parseSteamGrantStore(
@@ -1560,7 +1503,6 @@ class Client {
         "change-username-modal",
         "subscription-modal",
         "lang-selector",
-        "homepage-promos",
       ].forEach((tag) => {
         const modal = document.querySelector(tag) as HTMLElement & {
           close?: () => void;
@@ -1593,9 +1535,6 @@ class Client {
 
       hideMenuChrome();
 
-      if (window.PageOS?.session?.newPageView) {
-        window.PageOS.session.newPageView();
-      }
       crazyGamesSDK.loadingStop();
       crazyGamesSDK.gameplayStart();
       setInGameSignal(true);

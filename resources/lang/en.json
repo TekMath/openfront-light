@@ -1314,16 +1314,13 @@
   },
   "main": {
     "account": "Account",
-    "clans": "Clans",
     "copyright": "© OpenFront™ and Contributors",
     "create": "Create Lobby",
     "discord_avatar_alt": "Discord profile avatar",
     "github": "GitHub",
     "go_to_troubleshooting": "Go to our troubleshooting page",
     "help": "Help",
-    "inventory": "Inventory",
     "join": "Join Lobby",
-    "leaderboard": "Leaderboard",
     "login_discord": "Login with Discord",
     "login_google": "Login with Google",
     "login_steam": "Login with Steam",
@@ -1542,17 +1539,10 @@
   },
   "mode_selector": {
     "coming_soon": "Coming Soon",
-    "lobbies_unreachable": "Can't reach the public lobbies right now",
-    "offline_lobbies": "Public lobbies aren't available while you're offline",
     "ranked_1v1_title": "1v1",
     "ranked_2v2_title": "2v2",
     "ranked_pairing_note": "In team modes, clanmates and friends in the queue are placed on the same team where possible. Friends are paired first, then clanmates. If your ratings are too far apart you'll be matched separately to keep games fair.",
-    "ranked_title": "Ranked",
-    "retry_lobbies": "Retry",
-    "servers_unreachable": "Can't connect to the OpenFront servers",
-    "teams_count": "{teamCount} teams",
-    "teams_of": "{teamCount} teams of {playersPerTeam}",
-    "teams_title": "Teams"
+    "ranked_title": "Ranked"
   },
   "multi_tab": {
     "detected": "Multiple open game tabs detected.",
@@ -1806,7 +1796,6 @@
     "notify_on": "Game start alert is on",
     "notify_started": "Your game is starting!",
     "players_per_team": "of {num}",
-    "see_all": "See all {count}",
     "started": "Started",
     "starting_game": "Starting…",
     "starting_in": "Starting in {time}",
@@ -1824,7 +1813,6 @@
     "trusted_locked": "Trusted accounts only. Your account isn't trusted yet.",
     "trusted_tooltip_title": "Trusted lobby",
     "trusted_unlocked": "Trusted accounts only. Your account is trusted.",
-    "upcoming": "Upcoming",
     "waiting_for_players": "Waiting for players"
   },
   "purchase_nudge": {
@@ -2396,10 +2384,7 @@
   },
   "win_modal": {
     "died": "You died",
-    "discord_description": "Connect with players, discover new features, and win prizes!",
     "exit": "Exit Game",
-    "join_discord": "Join Our Discord Community!",
-    "join_server": "Join Server",
     "keep": "Keep Playing",
     "match_cancelled": "Match cancelled — not all players spawned",
     "nation_won": "Nation {nation} has won!",
@@ -2408,8 +2393,6 @@
     "other_won": "{player} has won!",
     "requeue": "Play Again",
     "spectate": "Spectate",
-    "support_openfront": "Support OpenFront!",
-    "territory_pattern": "Purchase a territory skin to go ad-free!",
     "you_won": "You Won!",
     "your_team": "Your team won!",
     "youtube_tutorial": "Need some help?"

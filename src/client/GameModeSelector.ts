@@ -1,28 +1,8 @@
-import { html, LitElement, nothing, type TemplateResult } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { ClientEnv } from "src/client/ClientEnv";
-import { UserMeResponse } from "../core/ApiSchemas";
-import {
-  Duos,
-  GameMapType,
-  GameMode,
-  GameType,
-  HumansVsNations,
-  Quads,
-  Trios,
-} from "../core/game/Game";
-import { PublicGameInfo, PublicGames } from "../core/Schemas";
+import { GameType } from "../core/game/Game";
 import { getDesktopSessionState } from "./Auth";
 import "./components/IOSAddToHomeScreenBanner";
-import {
-  canJoinTrustedLobby,
-  lobbyCard,
-  mapAspectRatios,
-  trustRequiredDialog,
-  viewerIsSignedIn,
-  viewerIsTrusted,
-} from "./components/LobbyCard";
-import { crazyGamesSDK } from "./CrazyGamesSDK";
 import {
   getDesktopUpdateState,
   isDesktopShell,
@@ -39,20 +19,15 @@ import { JoinLobbyEvent } from "./Main";
 import {
   backendUnreachableConfirmed,
   isPinnedToAVersion,
-  MANUAL_RETRY_COOLDOWN_MS,
   manualRetryAvailable,
-  refreshServerList,
   retryServerList,
   type BackendReachabilityDetail,
 } from "./ServerList";
 import { SinglePlayerModal } from "./SinglePlayerModal";
 import { UsernameInput } from "./UsernameInput";
 import {
-  calculateServerTimeOffset,
   getGamesPlayed,
-  getSecondsUntilServerTimestamp,
   reloadForUpdate,
-  renderDuration,
   showToast,
   translateText,
 } from "./Utils";
@@ -299,21 +274,25 @@ export function shouldBlockJoin(
   return shouldBlockSocketSourcedAction(update, session);
 }
 
+/**
+ * openfront-light: the home screen only offers solo (plus the tutorial for new
+ * players) and private lobbies (create / join by code). The public lobby
+ * cards, the lobby browser link and the ranked entry point are gone, and the
+ * server never schedules public lobbies (MasterLobbyService).
+ *
+ * The public-lobby socket is still opened: it carries the "new build
+ * deployed" / drain signal that prompts players to reload, which a
+ * self-hosted server needs after a redeploy.
+ */
 @customElement("game-mode-selector")
 export class GameModeSelector extends LitElement {
-  @state() private lobbies: PublicGames | null = null;
   @state() private inputValid: boolean = true;
   @state() private desktopUpdateState: DesktopUpdateState | null = null;
-  @state() private viewerTrusted: boolean = false;
-  @state() private viewerSignedIn: boolean = false;
-  @state() private showTrustRequired: boolean = false;
   @state() private desktopSessionState: DesktopSessionState | null = null;
   // The DEBOUNCED outage signal, not the raw per-attempt one: see
   // multiplayerAllowedForBackend for why one missed heartbeat must not dim
   // these buttons.
   @state() private backendOutage = false;
-  private serverTimeOffset: number = 0;
-  private defaultLobbyTime: number = 0;
 
   // True from join-lobby until leave-lobby: the player is waiting in (or
   // loading into) a lobby. This socket is NOT scoped to the homepage — Main.ts
@@ -324,29 +303,13 @@ export class GameModeSelector extends LitElement {
   // player is back at the menu). Kept apart from the socket's own state so a
   // session change can close and reopen the feed without forgetting that.
   private feedWanted = false;
-  // The socket ran out of fast attempts and is only re-dialing slowly;
-  // cleared by the next start() or snapshot.
-  @state() private feedGaveUp = false;
-  // Held for the same cooldown as the other Retry affordances, on this
-  // component's own clock: refreshServerList fires a real request per press
-  // (past its 1s floor), so this is what stops a player leaning on it.
-  @state() private retryCoolingDown = false;
-  private retryCooldownTimer: number | undefined;
   // An update/drain signal arrived during a lobby wait; prompt on leave-lobby.
   private updateDeferred = false;
 
-  private lobbySocket = new PublicLobbySocket(
-    (lobbies) => this.handleLobbiesUpdate(lobbies),
-    {
-      onUpdateAvailable: () => this.handleUpdateAvailable(),
-      onGaveUp: () => {
-        // Nothing is loading any more, and cards from a feed that has died
-        // are lobbies the player cannot join.
-        this.feedGaveUp = true;
-        this.lobbies = null;
-      },
-    },
-  );
+  // Lobby snapshots are ignored: only the update signal is used (see above).
+  private lobbySocket = new PublicLobbySocket(() => {}, {
+    onUpdateAvailable: () => this.handleUpdateAvailable(),
+  });
 
   private handleUpdateAvailable() {
     // The desktop shell runs the bundle from a local overlay and updates it
@@ -398,7 +361,6 @@ export class GameModeSelector extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.defaultLobbyTime = ClientEnv.gameCreationRate() / 1000;
     window.addEventListener(
       "username-validity-change",
       this.handleValidityChange,
@@ -407,7 +369,6 @@ export class GameModeSelector extends LitElement {
       "desktop-update-state",
       this.onDesktopUpdateState,
     );
-    document.addEventListener("userMeResponse", this.onUserMe);
     if (isDesktopShell()) {
       // Seed BOTH from their current values. This element is rendered by
       // <play-page> on a Lit microtask, so it cannot exist yet when the status
@@ -446,8 +407,6 @@ export class GameModeSelector extends LitElement {
 
   disconnectedCallback() {
     this.stop();
-    window.clearTimeout(this.retryCooldownTimer);
-    this.retryCoolingDown = false;
     window.removeEventListener(
       "username-validity-change",
       this.handleValidityChange,
@@ -456,7 +415,6 @@ export class GameModeSelector extends LitElement {
       "desktop-update-state",
       this.onDesktopUpdateState,
     );
-    document.removeEventListener("userMeResponse", this.onUserMe);
     document.removeEventListener(
       "desktop-session-state",
       this.onDesktopSessionState,
@@ -490,19 +448,6 @@ export class GameModeSelector extends LitElement {
     this.desktopUpdateState = (e as CustomEvent<DesktopUpdateState>).detail;
   };
 
-  private onUserMe = (e: Event) => {
-    const me = (e as CustomEvent<UserMeResponse | false>).detail;
-    this.viewerSignedIn = viewerIsSignedIn(me);
-    this.viewerTrusted = viewerIsTrusted(me);
-    // A CrazyGames sign-in surfaces as a userMeResponse without a linked
-    // identity, so re-read the SDK profile alongside it.
-    if (crazyGamesSDK.isOnCrazyGames()) {
-      void crazyGamesSDK.getUserProfile().then((user) => {
-        if (user !== null) this.viewerSignedIn = true;
-      });
-    }
-  };
-
   private onDesktopSessionState = (e: Event) => {
     const next = (e as CustomEvent<DesktopSessionState>).detail;
     const wasSuspended = lobbyFeedSuspended(this.desktopSessionState);
@@ -510,9 +455,8 @@ export class GameModeSelector extends LitElement {
     const suspended = lobbyFeedSuspended(next);
     if (suspended === wasSuspended || !this.feedWanted) return;
     if (suspended) {
-      this.closeLobbyFeed();
+      this.lobbySocket.stop();
     } else {
-      this.feedGaveUp = false;
       this.lobbySocket.start();
     }
   };
@@ -528,13 +472,6 @@ export class GameModeSelector extends LitElement {
     this.lobbySocket.stop();
   }
 
-  // Also drops the snapshot: a card from a feed we have closed is a lobby the
-  // player cannot join, and the hero slot reads `null` as "show why".
-  private closeLobbyFeed() {
-    this.lobbySocket.stop();
-    this.lobbies = null;
-  }
-
   /**
    * Re-open the public-lobby socket after stop().
    *
@@ -542,136 +479,25 @@ export class GameModeSelector extends LitElement {
    * which was fine while every exit from a started game reloaded the page. It
    * is not fine for an exit that leaves in place (openInvite, OPE-255): this
    * element is never disconnected, so connectedCallback never runs again and
-   * the lobby list stayed frozen on whatever it last received.
+   * the socket stayed closed.
    *
    * Safe to call when already running -- PublicLobbySocket.start() closes any
-   * existing socket before opening a new one -- but callers should still only
-   * use it to undo a stop(), since a needless reconnect drops the cached
-   * snapshot and re-primes the list from the server.
+   * existing socket before opening a new one.
    */
   public start() {
-    this.openLobbyFeed();
-  }
-
-  private openLobbyFeed(refreshList = false) {
     this.feedWanted = true;
-    this.feedGaveUp = false;
-    if (lobbyFeedSuspended(this.desktopSessionState)) {
-      // The session may have dropped while Main had the feed stopped, in
-      // which case the snapshot from before the game is still here and its
-      // cards would render as joinable.
-      this.lobbies = null;
-      return;
-    }
-    this.lobbySocket.start({ refreshList });
-  }
-
-  /**
-   * Whether an empty hero slot should say "offline" instead of spinning. The
-   * feed is closed on a gated session, so nothing is loading; on a confirmed
-   * outage it may still be connecting, but a spinner that the status bar
-   * contradicts reads as broken, and the feed reconnects on its own if the
-   * server answers.
-   */
-  private offlineForLobbies(): boolean {
-    return (
-      lobbyFeedSuspended(this.desktopSessionState) ||
-      this.backendOutage ||
-      this.feedGaveUp
-    );
-  }
-
-  private renderLobbiesUnavailable() {
-    // A gated desktop session has its remedy in the status bar, and the feed
-    // stays closed until it is taken, so a Retry here could only do nothing.
-    const canRetry = !lobbyFeedSuspended(this.desktopSessionState);
-    // "Offline" is only ever said of a gated desktop session. An outage is
-    // our servers not answering, which is not the player being offline.
-    const message = !canRetry
-      ? "mode_selector.offline_lobbies"
-      : this.backendOutage
-        ? "mode_selector.servers_unreachable"
-        : "mode_selector.lobbies_unreachable";
-    return html`<div
-      class="flex flex-col items-center justify-center gap-3 h-44 sm:h-full rounded-xl bg-surface/60 px-6 text-center text-sm font-medium text-white/60"
-    >
-      ${translateText(message)}
-      ${canRetry
-        ? html`<button
-            class="px-4 py-2 rounded-md bg-malibu-blue hover:bg-aquarius text-white text-sm font-medium uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-malibu-blue"
-            ?disabled=${this.retryCoolingDown}
-            @click=${this.retryLobbies}
-          >
-            ${translateText("mode_selector.retry_lobbies")}
-          </button>`
-        : nothing}
-    </div>`;
-  }
-
-  private retryLobbies = () => {
-    if (this.retryCoolingDown) return;
-    this.retryCoolingDown = true;
-    this.retryCooldownTimer = window.setTimeout(() => {
-      this.retryCoolingDown = false;
-    }, MANUAL_RETRY_COOLDOWN_MS);
-    // Only a feed that gave up is reopened: one still inside its fast
-    // attempts is already dialing, and restarting it would throw that attempt
-    // away. The socket refreshes the list itself before it dials.
-    if (this.feedGaveUp && this.feedWanted) {
-      this.openLobbyFeed(true);
-      return;
-    }
-    // Shown over a feed that has not given up, this is a confirmed outage,
-    // which only an answer from the list API clears.
-    void refreshServerList();
-  };
-
-  private handleLobbiesUpdate(lobbies: PublicGames) {
-    this.lobbies = lobbies;
-    this.feedGaveUp = false;
-    this.serverTimeOffset = calculateServerTimeOffset(lobbies.serverTime);
-    document.dispatchEvent(
-      new CustomEvent("public-lobbies-update", {
-        detail: { payload: lobbies },
-      }),
-    );
-    this.requestUpdate();
-
-    const allGames = Object.values(lobbies.games ?? {}).flat();
-    for (const game of allGames) {
-      mapAspectRatios.ensure(game.gameConfig?.gameMap as GameMapType, () =>
-        this.requestUpdate(),
-      );
-    }
+    if (lobbyFeedSuspended(this.desktopSessionState)) return;
+    this.lobbySocket.start();
   }
 
   render() {
-    const ffa = this.lobbies?.games?.["ffa"]?.[0];
-    const teams = this.lobbies?.games?.["team"]?.[0];
-    const special = this.lobbies?.games?.["special"]?.[0];
-    // The hero slot holds the spinner, then the FFA card; loaded without one
-    // it goes and the upcoming column takes the whole row.
-    const heroSlot = this.lobbies === null || ffa !== undefined;
-    // A lone secondary card takes both of the column's card rows.
-    const cardRows =
-      teams && special
-        ? { special: "sm:row-start-2", teams: "sm:row-start-3" }
-        : {
-            special: "sm:row-start-2 sm:row-span-2",
-            teams: "sm:row-start-2 sm:row-span-2",
-          };
-
-    // DOM is in phone order; sm+ places the same elements onto a grid and
-    // reading-flow keeps focus order following the rows (Chromium only).
     return html`
-      <div
-        class="flex flex-col gap-4 w-full px-4 pb-4 mx-auto sm:px-0 sm:pb-0 sm:grid sm:grid-cols-[2fr_1fr] sm:grid-rows-[auto_min(24rem,40vh)_auto_auto] desktop:sm:grid-rows-[auto_40vh_auto_auto] sm:[reading-flow:grid-rows]"
-      >
+      <div class="flex flex-col gap-4 w-full px-4 pb-4 mx-auto sm:px-0 sm:pb-0">
         <ios-add-to-home-screen-banner
-          class="no-crazygames [&:empty]:hidden sm:col-span-2 sm:row-start-1"
+          class="no-crazygames [&:empty]:hidden"
         ></ios-add-to-home-screen-banner>
 
-        <div class="flex gap-4 h-14 sm:col-span-2 sm:row-start-3">
+        <div class="flex gap-4 h-16">
           <div class="flex-[2]">
             ${this.renderSmallActionCard(
               translateText("main.solo"),
@@ -689,82 +515,30 @@ export class GameModeSelector extends LitElement {
               </div>`
             : nothing}
         </div>
-        <div class="grid grid-cols-3 gap-4 h-14 sm:col-span-2 sm:row-start-4">
+        <div class="grid grid-cols-2 gap-4 h-16">
           ${this.renderSmallActionCard(
             translateText("main.create"),
             this.openHostLobby,
             SECONDARY_ACTION,
-            undefined,
-            true,
-          )}
-          ${this.renderSmallActionCard(
-            translateText("mode_selector.ranked_title"),
-            this.openRankedMenu,
-            SECONDARY_ACTION,
-            undefined,
             true,
           )}
           ${this.renderSmallActionCard(
             translateText("main.join"),
             this.openJoinLobby,
             SECONDARY_ACTION,
-            this.hostedLobbyCount(),
             true,
           )}
         </div>
-
-        ${heroSlot
-          ? html`<div class="min-w-0 sm:col-start-1 sm:row-start-2">
-              ${ffa
-                ? this.renderLobbyCard(ffa, this.getLobbyTitle(ffa))
-                : this.offlineForLobbies()
-                  ? this.renderLobbiesUnavailable()
-                  : html`<div
-                      class="flex items-center justify-center h-44 sm:h-full"
-                    >
-                      <span
-                        class="size-24 rounded-full border-[6px] border-blue-500/30 border-t-blue-500 animate-spin"
-                      ></span>
-                    </div>`}
-            </div>`
-          : nothing}
-
-        <!-- Always rendered: the heading is the only way into the lobby browser. -->
-        <section
-          class="flex flex-col gap-4 min-w-0 sm:grid sm:grid-rows-[auto_1fr_1fr] sm:row-start-2 sm:min-h-0 sm:[reading-flow:grid-rows] ${heroSlot
-            ? "sm:col-start-2"
-            : "sm:col-start-1 sm:col-span-2"}"
-        >
-          ${teams
-            ? html`<div class="min-w-0 sm:min-h-0 ${cardRows.teams}">
-                ${this.renderLobbyCard(teams, this.getLobbyTitle(teams))}
-              </div>`
-            : nothing}
-          ${special
-            ? html`<div class="min-w-0 sm:min-h-0 ${cardRows.special}">
-                ${this.renderLobbyCard(special, this.getLobbyTitle(special))}
-              </div>`
-            : nothing}
-          ${this.renderUpcomingHeading()}
-        </section>
-
-        ${this.showTrustRequired
-          ? trustRequiredDialog(
-              this.viewerSignedIn,
-              () => (this.showTrustRequired = false),
-            )
-          : nothing}
       </div>
     `;
   }
 
   /**
-   * Refuses an API-DEPENDENT action (Create, Ranked, Join by code) and tells
-   * the player why. Returns true when the caller should stop.
+   * Refuses an API-DEPENDENT action (Create, Join by code) and tells the
+   * player why. Returns true when the caller should stop.
    *
    * The reachability half applies here -- see the rule at the top of this
-   * file: none of these three can resolve a server without the list API. A
-   * lobby card goes through blockedFromLobbyJoin below instead.
+   * file: neither can resolve a server without the list API.
    *
    * Deliberately NOT implemented with the `disabled` attribute the way
    * renderSmallActionCard handles invalid input: a disabled control (and
@@ -785,36 +559,6 @@ export class GameModeSelector extends LitElement {
     reportMultiplayerRefusal(this.backendOutage);
     return true;
   }
-
-  /**
-   * The same, for the public-lobby card: the desktop states still refuse, a
-   * list-API outage never does. Its lobby came over a live game-server socket
-   * (the rule at the top of this file), so there is no reachability reason to
-   * refuse and nothing to retry -- hence `false` to the refusal report, which
-   * leaves the desktop wiggle as the only feedback.
-   */
-  private blockedFromLobbyJoin(): boolean {
-    if (
-      !shouldBlockSocketSourcedAction(
-        this.desktopUpdateState,
-        this.desktopSessionState,
-      )
-    )
-      return false;
-    reportMultiplayerRefusal(false);
-    return true;
-  }
-
-  private openRankedMenu = () => {
-    if (this.blockedFromApiAction()) return;
-    if (!this.validateUsername()) return;
-    window.showPage?.("page-ranked");
-  };
-
-  private openDetailedView = () => {
-    if (!this.validateUsername()) return;
-    window.showPage?.("page-detailed-view");
-  };
 
   private openSinglePlayerModal = () => {
     if (!this.validateUsername()) return;
@@ -841,76 +585,12 @@ export class GameModeSelector extends LitElement {
     (document.querySelector("join-lobby-modal") as JoinLobbyModal)?.open();
   };
 
-  // Number of open hosted lobbies waiting in the browser; shown as a chip
-  // on the Join button.
-  /**
-   * The heading over the upcoming column, and the way to the lobby browser now
-   * that the Detailed View button is gone. Heading and link are one control:
-   * side by side they were two runs of small uppercase text, and neither read
-   * as clickable. A heading may hold a button, so the h2 survives.
-   *
-   * Dims and stops responding on an invalid username, as the button it
-   * replaces did: openDetailedView's own check is a silent backstop that
-   * assumes its control already looks disabled.
-   */
-  /** Heading over the upcoming column; also the link to the lobby browser. */
-  private renderUpcomingHeading() {
-    const count = this.advertisedLobbyCount();
-    return html`
-      <h2 class="min-w-0 sm:row-start-1">
-        <button
-          @click=${this.openDetailedView}
-          ?disabled=${!this.inputValid}
-          class="group/upcoming flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.04] py-1.5 pl-2.5 pr-1.5 transition-colors hover:border-malibu-blue/50 hover:bg-malibu-blue/15 ${this
-            .inputValid
-            ? ""
-            : DISABLED}"
-        >
-          <span
-            class="truncate text-sm font-bold uppercase tracking-widest text-white/70 group-hover/upcoming:text-white"
-            >${translateText("public_lobby.upcoming")}</span
-          >
-          <span
-            class="flex shrink-0 items-center gap-0.5 rounded bg-malibu-blue py-0.5 pl-2 pr-1 text-xs font-bold uppercase tracking-wider text-white group-hover/upcoming:bg-aquarius"
-          >
-            ${count > 0
-              ? translateText("public_lobby.see_all", { count })
-              : nothing}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              class="size-4"
-              aria-hidden="true"
-            >
-              <path
-                fill-rule="evenodd"
-                d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
-                clip-rule="evenodd"
-              />
-            </svg>
-          </span>
-        </button>
-      </h2>
-    `;
-  }
-
-  /** Every lobby the browser lists, hosted included. */
-  private advertisedLobbyCount(): number {
-    return Object.values(this.lobbies?.games ?? {}).flat().length;
-  }
-
-  private hostedLobbyCount(): number {
-    return this.lobbies?.games?.hosted?.length ?? 0;
-  }
-
   private renderSmallActionCard(
     title: string,
     onClick: () => void,
     bgClass: string = SECONDARY_ACTION,
-    badge?: number,
-    // Only the three multiplayer action cards (create/ranked/join) pass this;
-    // the solo card is never gated (see openSinglePlayerModal) and must never
+    // Only the two multiplayer action cards (create/join) pass this; the
+    // solo card is never gated (see openSinglePlayerModal) and must never
     // show as disabled here.
     gated: boolean = false,
   ) {
@@ -934,144 +614,7 @@ export class GameModeSelector extends LitElement {
             : ""}"
       >
         ${title}
-        ${badge
-          ? html`<span
-              class="absolute -top-2 -right-2 min-w-[1.375rem] h-[1.375rem] px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs font-bold tracking-normal"
-              >${badge}</span
-            >`
-          : nothing}
       </button>
     `;
-  }
-
-  private renderLobbyCard(
-    lobby: PublicGameInfo,
-    titleContent: string | TemplateResult,
-  ) {
-    const timeRemaining = lobby.startsAt
-      ? getSecondsUntilServerTimestamp(lobby.startsAt, this.serverTimeOffset)
-      : undefined;
-
-    let timeDisplay: string;
-    let timeDisplayUppercase = false;
-    if (timeRemaining === undefined) {
-      timeDisplay = renderDuration(this.defaultLobbyTime);
-    } else if (timeRemaining > 0) {
-      timeDisplay = renderDuration(timeRemaining);
-    } else {
-      timeDisplay = translateText("public_lobby.starting_game");
-      timeDisplayUppercase = true;
-    }
-
-    // Gated, not disabled: `disabled` (which the option below sets, together
-    // with pointer-events-none) swallows the click, and the click is what
-    // makes the update bar wiggle. `blocked` only dims and reports
-    // aria-disabled; validateAndJoin does the refusing.
-    //
-    // Socket-sourced, so a list-API outage neither dims this nor refuses it:
-    // the same predicate validateAndJoin uses, for the reason in the rule at
-    // the top of this file.
-    return lobbyCard({
-      lobby,
-      subtitle: titleContent,
-      timeDisplay,
-      timeDisplayUppercase,
-      disabled: !this.inputValid,
-      blocked: shouldBlockSocketSourcedAction(
-        this.desktopUpdateState,
-        this.desktopSessionState,
-      ),
-      viewerTrusted: this.viewerTrusted,
-      onClick: () => this.validateAndJoin(lobby),
-    });
-  }
-
-  private validateAndJoin(lobby: PublicGameInfo) {
-    if (this.blockedFromLobbyJoin()) return;
-    if (!this.validateUsername()) return;
-    if (!canJoinTrustedLobby(lobby, this.viewerTrusted)) {
-      this.showTrustRequired = true;
-      return;
-    }
-
-    this.dispatchEvent(
-      new CustomEvent("join-lobby", {
-        detail: {
-          gameID: lobby.gameID,
-          source: "public",
-          publicLobbyInfo: lobby,
-        } as JoinLobbyEvent,
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  private getLobbyTitle(lobby: PublicGameInfo): string {
-    const config = lobby.gameConfig!;
-    if (config.gameMode === GameMode.FFA) {
-      return translateText("game_mode.ffa");
-    }
-
-    if (config?.gameMode === GameMode.Team) {
-      const totalPlayers = config.maxPlayers ?? lobby.numClients ?? undefined;
-      const formatTeamsOf = (
-        teamCount: number | undefined,
-        playersPerTeam: number | undefined,
-        label?: string,
-      ) => {
-        if (!teamCount)
-          return label ?? translateText("mode_selector.teams_title");
-        const baseTitle = playersPerTeam
-          ? translateText("mode_selector.teams_of", {
-              teamCount: String(teamCount),
-              playersPerTeam: String(playersPerTeam),
-            })
-          : translateText("mode_selector.teams_count", {
-              teamCount: String(teamCount),
-            });
-        return `${baseTitle}${label ? ` (${label})` : ""}`;
-      };
-
-      switch (config.playerTeams) {
-        case Duos: {
-          const teamCount = totalPlayers
-            ? Math.floor(totalPlayers / 2)
-            : undefined;
-          return formatTeamsOf(teamCount, 2);
-        }
-        case Trios: {
-          const teamCount = totalPlayers
-            ? Math.floor(totalPlayers / 3)
-            : undefined;
-          return formatTeamsOf(teamCount, 3);
-        }
-        case Quads: {
-          const teamCount = totalPlayers
-            ? Math.floor(totalPlayers / 4)
-            : undefined;
-          return formatTeamsOf(teamCount, 4);
-        }
-        case HumansVsNations: {
-          const humanSlots = config.maxPlayers ?? lobby.numClients;
-          return humanSlots
-            ? translateText("public_lobby.teams_hvn_detailed", {
-                num: String(humanSlots),
-              })
-            : translateText("public_lobby.teams_hvn");
-        }
-        default:
-          if (typeof config.playerTeams === "number") {
-            const teamCount = config.playerTeams;
-            const playersPerTeam =
-              totalPlayers && teamCount > 0
-                ? Math.floor(totalPlayers / teamCount)
-                : undefined;
-            return formatTeamsOf(teamCount, playersPerTeam);
-          }
-      }
-    }
-
-    return "";
   }
 }

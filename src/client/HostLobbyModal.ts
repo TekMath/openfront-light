@@ -235,7 +235,9 @@ export class HostLobbyModal extends BaseModal {
         >
           ${translateText("host_modal.title")}
         </span>
-        ${this.renderVisibilityToggle()}
+        <!-- openfront-light: no Private/Public toggle. Listing a lobby
+             publicly needs a subscription from the closed-source API, and
+             the light build has no public lobby browser to list it in. -->
       `,
       onBack: () => {
         this.leaveLobbyOnClose = true;

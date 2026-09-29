@@ -829,6 +829,9 @@ describe("PublicLobbySocket.start on a page its own game server rendered", () =>
     serverList = await vi.importActual<
       typeof import("../src/client/ServerList")
     >("../src/client/ServerList");
+    // openfront-light disables the server-list API by default; this block
+    // covers the upstream behaviour, so it turns it back on.
+    serverList.setServerListApiEnabledForTests(true);
     mocks.ensureServerList.mockReset();
     mocks.ensureServerList.mockImplementation(serverList.ensureServerList);
     mocks.reloadWouldRescue.mockReset();

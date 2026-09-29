@@ -4,7 +4,13 @@ import http from "http";
 import { lookup as lookupMime } from "mrmime";
 import path from "path";
 import { fileURLToPath } from "url";
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import {
+  createLogger,
+  defineConfig,
+  loadEnv,
+  type Logger,
+  type Plugin,
+} from "vite";
 import { createHtmlPlugin } from "vite-plugin-html";
 import { configDefaults } from "vitest/config";
 import {
@@ -26,6 +32,29 @@ import {
 // Vite already handles these, but its good practice to define them explicitly
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// openfront-light: in dev, publicDir is resources/, and the client imports
+// a number of files from resources/ as modules on purpose, through the
+// `resources` alias below (the renderer's atlas metadata, lang/en.json,
+// version.txt, QuickChat.json, countries.json, ...). Vite resolves them fine
+// but prints "Assets in public directory cannot be imported from JavaScript"
+// once per file on every dev start. Only that warning, and only for files
+// under /resources/, is dropped; every other message goes through untouched.
+function quietResourcesImportWarnings(): Logger {
+  const logger = createLogger();
+  const isResourcesImportWarning = (msg: string) =>
+    msg.includes("Assets in public directory cannot be imported") &&
+    msg.includes("/resources/");
+  const warn = logger.warn.bind(logger);
+  const warnOnce = logger.warnOnce.bind(logger);
+  logger.warn = (msg, options) => {
+    if (!isResourcesImportWarning(msg)) warn(msg, options);
+  };
+  logger.warnOnce = (msg, options) => {
+    if (!isResourcesImportWarning(msg)) warnOnce(msg, options);
+  };
+  return logger;
+}
 
 // Dev-only: resources/public/ is served at the site root, as the build copies
 // it into static/. Vite's publicDir (resources/) would put it under /public/.
@@ -337,6 +366,7 @@ export default defineConfig(({ mode }) => {
     root: "./",
     base: "/",
     publicDir: isProduction ? false : "resources",
+    customLogger: quietResourcesImportWarnings(),
 
     // Vite's JS preload helper (`__vitePreload`, used by dynamic import())
     // resolves a chunk's dependency list against `base`, so with base "/" the

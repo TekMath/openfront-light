@@ -7,7 +7,12 @@ import {
   ensureServerList,
   resetServerList,
   retryServerList,
+  setServerListApiEnabledForTests,
 } from "../src/client/ServerList";
+
+// openfront-light disables the server-list API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setServerListApiEnabledForTests(true);
 
 // Matches RETRY_BUTTON_COOLDOWN_MS in the component.
 const COOLDOWN_MS = 5_000;

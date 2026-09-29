@@ -16,11 +16,16 @@ import {
   retryServerList,
   serverListSite,
   serverListUrl,
+  setServerListApiEnabledForTests,
   setServerListInGame,
   startServerListPolling,
   stopServerListPolling,
   versionedPathForMismatchedGame,
 } from "../../src/client/ServerList";
+
+// openfront-light disables the server-list API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setServerListApiEnabledForTests(true);
 
 // Priority 1 of the multi-server v2 handoff: the client fetches the server
 // list from the API at page load and keeps it warm with a heartbeat, filters

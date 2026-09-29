@@ -115,6 +115,25 @@ export type ServerListStatus =
   // does today when the server is gone.
   | "no-server";
 
+// openfront-light: the server list lives in the closed-source API
+// (`/cluster.json`), which a self-hosted server does not have. Asking for it
+// anyway fails every heartbeat, and after CONFIRM_OUTAGE_AFTER_FAILURES the
+// UI treats the backend as down and greys out Create / Join lobby. So the
+// light build never asks: no heartbeat, no attempt, reachability stays
+// unknown (never "confirmed unreachable"), and apply() answers "fallback",
+// i.e. the page's own server from BOOTSTRAP_CONFIG -- exactly what an
+// upstream page does while the API is unreachable.
+let serverListApiEnabled = false;
+
+/**
+ * Test-only: turn the upstream server-list API behaviour back on, so the
+ * suites written against it keep exercising the heartbeat and the
+ * reachability gate. Not reset by resetServerList().
+ */
+export function setServerListApiEnabledForTests(enabled: boolean): void {
+  serverListApiEnabled = enabled;
+}
+
 let cached: { list: ServerList; fetchedAt: number } | null = null;
 let inflight: Promise<ServerList | null> | null = null;
 // When the last attempt settled, and whether it came back empty-handed. A
@@ -410,6 +429,7 @@ function warnMalformedOnce(detail: unknown): void {
  * attempt leaves `cached` alone — the last good list keeps serving.
  */
 function fetchOnce(): Promise<ServerList | null> {
+  if (!serverListApiEnabled) return Promise.resolve(null);
   if (inflight !== null) return inflight;
   const site = safeSite();
   if (site === undefined) return Promise.resolve(null);
@@ -439,6 +459,7 @@ function fetchOnce(): Promise<ServerList | null> {
  */
 export function startServerListPolling(): void {
   if (polling) return;
+  if (!serverListApiEnabled) return;
   try {
     if (safeSite() === undefined) return;
     if (isReplayShellHost(window.location.hostname)) return;

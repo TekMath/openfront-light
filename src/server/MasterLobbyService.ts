@@ -83,10 +83,16 @@ export class MasterLobbyService {
   // between broadcasts does not lose the first one's delists.
   private readonly pendingDelist = new Set<string>();
 
+  // openfront-light: the self-hosted build passes false so the master never
+  // creates scheduled public lobbies (ffa/team/special), locally or on a
+  // coordinator's request. Hosted (private) lobbies are unaffected: their
+  // host creates them through the worker. Defaults to true so the upstream
+  // scheduling tests keep exercising the scheduler.
   constructor(
     private playlist: MapPlaylist,
     private log: winston.Logger,
     awaitApiState = false,
+    private readonly schedulePublicLobbies = true,
   ) {
     this.active = !awaitApiState;
     this.stateKnown = !awaitApiState;
@@ -194,6 +200,12 @@ export class MasterLobbyService {
   // recentMaps (what the site just played) is not yet fed to the playlist —
   // its no-consecutive-repeat rule stays per server for now.
   private async handleCoordinatorCreate(msg: CoordinatorCreateGame) {
+    if (!this.schedulePublicLobbies) {
+      this.log.info(
+        `refusing coordinator createGame (${msg.publicGameType}): public lobbies disabled`,
+      );
+      return;
+    }
     if (!this.active || !this.started) {
       this.log.info(
         `refusing coordinator createGame (${msg.publicGameType}): ${
@@ -430,6 +442,7 @@ export class MasterLobbyService {
   }
 
   private async maybeScheduleLobby() {
+    if (!this.schedulePublicLobbies) return;
     // Coordinated: the site's queue depth and countdowns are the
     // coordinator's; adding our own here would double-schedule.
     if (this.isCoordinated()) return;

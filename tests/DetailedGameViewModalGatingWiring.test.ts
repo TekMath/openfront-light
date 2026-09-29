@@ -6,6 +6,7 @@ import {
   ensureServerList,
   resetServerList,
   retryServerList,
+  setServerListApiEnabledForTests,
 } from "../src/client/ServerList";
 import { GameMapType, GameMode } from "../src/core/game/Game";
 import type {
@@ -41,6 +42,10 @@ vi.mock("../src/client/LobbySocket", () => ({
 // shouldBlockMultiplayerAction), which registers <game-mode-selector> too --
 // harmless, nothing in this file instantiates it.
 import { DetailedGameViewModal } from "../src/client/components/DetailedGameViewModal";
+
+// openfront-light disables the server-list API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setServerListApiEnabledForTests(true);
 
 function lobby(gameID: string, publicGameType: PublicGameType): PublicGameInfo {
   return {

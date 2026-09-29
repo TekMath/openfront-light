@@ -165,7 +165,8 @@ export async function startMaster() {
   // A server that registers schedules nothing until the API calls it open: a
   // mistyped letter must not mint lobbies under a letter routed elsewhere.
   const registers = checkinBody(0) !== null;
-  lobbyService = new MasterLobbyService(playlist, log, registers);
+  // openfront-light: no scheduled public lobbies, only solo and private games.
+  lobbyService = new MasterLobbyService(playlist, log, registers, false);
 
   const INSTANCE_ID =
     ServerEnv.env() === GameEnv.Dev
