@@ -82,7 +82,7 @@ Every background call to the absent API failed and logged, on every start or eve
 
 #### 8. GitHub Actions: checks, then build and publish the light image
 
-- `.github/workflows/ci.yml` is the only pipeline. On every PR and push it runs lint, Prettier, tests, typecheck + `build-server-light`, and the generated-maps check. When they all pass, it builds `Dockerfile.light` for `linux/amd64`. It pushes to GHCR (`ghcr.io/<owner>/openfront-light`, with a registry layer cache under `:buildcache`) only from `main` (`latest`) and `v*` tags. The maps come from the `OPENFRONT_MAPS` repository variable, with the prebuilt-image selection as the default.
+- `.github/workflows/ci.yml` is the only pipeline. On every PR and push it runs lint, Prettier, tests, typecheck + `build-server-light`, and the generated-maps check. When they all pass, it builds `Dockerfile.light` for `linux/amd64`. It pushes to GHCR (`ghcr.io/<owner>/openfront-light`, with a registry layer cache under `:buildcache`) only when a `v*` tag is pushed: `:<tag>`, plus `:latest` for non-pre-release tags. The image's `GIT_COMMIT` is the tag name. The maps come from the `OPENFRONT_MAPS` repository variable, with the prebuilt-image selection as the default.
 - Removed upstream workflows that deploy to or automate openfront.io: `deploy.yml`, `release.yml`, `pr-gate.yml`, `issue-lifecycle-*.yml`, `pr-author.yml`, `pr-close-on-label.yml`, `pr-description.yml`, `pr-stale.yml`, `cherry-pick-milestone.yml`, `claude-code-review.yml`. The upstream-specific issue templates (`database_request`, `new-contribution-template-*`) are removed too. `scripts/pr-gate/` and `scripts/issue-lifecycle/` are kept (`tests/PrGateRules.test.ts` still covers the former).
 - `.github/PULL_REQUEST_TEMPLATE.md` and `CODEOWNERS` now describe this fork instead of upstream's approved-issue process and teams.
 
@@ -361,7 +361,7 @@ Some shell blocks are delimited with `BEGIN ... (tested)` / `END` markers and ex
 
 openfront-light keeps a single workflow (see changelog entry 8):
 
-- `ci.yml`: lint (`lint:github`), Prettier check, tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` from `main` (`latest`, `sha-<short>`) and from `v*` tags (`<tag>`, `sha-<short>`); on PRs it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
+- `ci.yml`: lint (`lint:github`), Prettier check, tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
 
 Upstream's `deploy.yml`, `release.yml` and PR / issue bot workflows target openfront.io infrastructure and are not used here.
 

@@ -69,9 +69,9 @@ ghcr.io/tekmath/openfront-light:latest
 Maps included: **World, Giant World Map, Europe, North America, South
 America, Asia, Africa**.
 
-The [CI workflow](.github/workflows/ci.yml) rebuilds it on every push to
-`main`, after lint, tests and the other checks pass. Tags: `latest` (main),
-`sha-<commit>`, and `vX.Y.Z` for git tags.
+Images are published when a version tag is pushed, after lint, tests and the
+other checks pass (see [Releasing](#releasing)). `latest` is the newest stable
+release; pin a version (e.g. `:v1.0.0`) to stay on it.
 
 ```bash
 docker run -d --name openfront -p 8080:8080 \
@@ -154,6 +154,23 @@ Create a **Docker** application from this repository. Then set
 8080, as Clever expects. Their load balancer handles HTTPS and WebSockets.
 
 More details are in [`docs/SelfHost.md`](docs/SelfHost.md).
+
+## Releasing
+
+The [CI workflow](.github/workflows/ci.yml) checks every PR and push, and
+builds the image without publishing it. To publish, push a tag starting with
+`v`:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This pushes `ghcr.io/tekmath/openfront-light:v1.0.0` and moves `:latest`. A
+pre-release tag such as `v1.1.0-rc.1` only publishes its own tag and leaves
+`:latest` alone. The embedded maps come from the `OPENFRONT_MAPS` repository
+variable (Settings > Secrets and variables > Actions > Variables), or the
+default list above.
 
 ## Local development
 
