@@ -22,9 +22,12 @@ import {
   buildPublicAssetManifest,
   copyRootPublicFiles,
   createHashedPublicAssetFiles,
+  filterMapAssets,
   getProprietaryDir,
   getPublicDir,
   getResourcesDir,
+  listMapDirs,
+  parseMapSubset,
   writePublicAssetManifest,
   writeRootFilesIndex,
 } from "./src/server/PublicAssetManifest";
@@ -237,8 +240,14 @@ export default defineConfig(({ mode }) => {
   const resourcesDir = getResourcesDir(__dirname);
   const proprietaryDir = getProprietaryDir(__dirname);
   const sourceDirs = [resourcesDir, proprietaryDir];
+  // openfront-light: OPENFRONT_MAPS embeds only a subset of the maps (light
+  // self-host image, Dockerfile.light). Unset = every map, as upstream.
+  const enabledMaps = parseMapSubset(
+    env.OPENFRONT_MAPS,
+    listMapDirs(resourcesDir),
+  );
   const assetManifest: AssetManifest = isProduction
-    ? buildPublicAssetManifest(sourceDirs)
+    ? filterMapAssets(buildPublicAssetManifest(sourceDirs), enabledMaps)
     : {};
   const cdnBase = env.CDN_BASE ?? "";
   const htmlAssetData = {
@@ -425,6 +434,8 @@ export default defineConfig(({ mode }) => {
 
     define: {
       __ASSET_MANIFEST__: JSON.stringify(assetManifest),
+      // openfront-light: see src/client/utilities/EnabledMaps.ts.
+      __ENABLED_MAPS__: JSON.stringify(enabledMaps),
       "process.env.WEBSOCKET_URL": JSON.stringify(
         isProduction ? "" : "localhost:3000",
       ),

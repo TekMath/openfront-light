@@ -15,6 +15,7 @@ import {
   sendCheckin,
 } from "./ClusterCheckin";
 import { getDescriptor } from "./DesktopRelease";
+import { workerHttpProxy, workerUpgradeProxy } from "./InProcessWorkerProxy";
 import {
   coordinatorUrl,
   LobbyCoordinatorClient,
@@ -38,6 +39,15 @@ const log = logger.child({ comp: "m" });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// openfront-light: in the single-port light image there is no nginx in front
+// of the master, so it forwards worker traffic itself. Mounted before
+// express.json() so request bodies stream to the worker untouched.
+if (ServerEnv.workerProxyInProcess()) {
+  const proxyOpts = { numWorkers: ServerEnv.numWorkers() };
+  app.use(workerHttpProxy(proxyOpts));
+  server.on("upgrade", workerUpgradeProxy(proxyOpts));
+}
 
 app.use(express.json());
 
@@ -242,7 +252,8 @@ export async function startMaster() {
     );
   });
 
-  const PORT = 3000;
+  // openfront-light: PORT env (8080 in the light image), 3000 by default.
+  const PORT = ServerEnv.masterPort();
   server.listen(PORT, () => {
     log.info(`Master HTTP server listening on port ${PORT}`);
   });

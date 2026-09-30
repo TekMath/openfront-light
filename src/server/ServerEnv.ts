@@ -328,6 +328,33 @@ export class ServerEnv {
     }
     return v;
   }
+  // openfront-light: the closed-source API does not exist on a self-hosted
+  // server, so server-to-API calls that would only fail (join_verify) are
+  // skipped instead of timing out and failing open. Tests can turn it back on.
+  private static apiEnabledFlag = false;
+  static apiEnabled(): boolean {
+    return ServerEnv.apiEnabledFlag;
+  }
+  static setApiEnabledForTests(enabled: boolean): void {
+    ServerEnv.apiEnabledFlag = enabled;
+  }
+  // openfront-light: the port the master listens on. A PaaS (Clever Cloud)
+  // routes to one fixed port (8080), set through PORT; dev keeps 3000.
+  static masterPort(): number {
+    const raw = process.env.PORT;
+    if (raw === undefined || raw.length === 0) return 3000;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      throw new Error(`Invalid PORT: ${JSON.stringify(raw)}`);
+    }
+    return n;
+  }
+  // openfront-light: WORKER_PROXY=inprocess makes the master forward /wN/ and
+  // create-game traffic to the workers itself (InProcessWorkerProxy.ts), for
+  // the single-port light image that runs without nginx.
+  static workerProxyInProcess(): boolean {
+    return process.env.WORKER_PROXY === "inprocess";
+  }
   static apiKey(): string {
     return process.env.API_KEY ?? "";
   }

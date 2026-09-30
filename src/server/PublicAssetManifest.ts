@@ -444,3 +444,74 @@ export function writePublicAssetManifest(
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, `${JSON.stringify(assetManifest, null, 2)}\n`);
 }
+
+// openfront-light: map subset for the light self-host image (OPENFRONT_MAPS,
+// see Dockerfile.light). The map binaries are ~600 MB of the ~660 MB of
+// assets, so a private server can embed only the maps it plays.
+
+// Kept even when their map is left out: the cosmetics preview renders on
+// Australia's 4x terrain (src/client/render/preview/loadPreviewMap.ts).
+const ALWAYS_KEPT_MAP_ASSETS = new Set([
+  "maps/australia/manifest.json",
+  "maps/australia/map4x.bin",
+]);
+
+// Parses OPENFRONT_MAPS ("world, europe,iceland") into lowercase map
+// directory names. Empty or unset = null = every map (upstream behaviour).
+// An unknown name fails the build rather than shipping a picker entry whose
+// map never loads.
+export function parseMapSubset(
+  raw: string | undefined,
+  availableMapDirs: readonly string[],
+): string[] | null {
+  if (raw === undefined || raw.trim().length === 0) return null;
+  const dirs = [
+    ...new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0),
+    ),
+  ];
+  const available = new Set(availableMapDirs);
+  const unknown = dirs.filter((d) => !available.has(d));
+  if (unknown.length > 0) {
+    throw new Error(
+      `OPENFRONT_MAPS: unknown map(s) ${unknown.join(", ")}; see resources/maps/`,
+    );
+  }
+  if (dirs.length === 0) return null;
+  return dirs.sort();
+}
+
+export function listMapDirs(resourcesDir: string): string[] {
+  const mapsDir = path.join(resourcesDir, "maps");
+  if (!fs.existsSync(mapsDir)) return [];
+  return fs
+    .readdirSync(mapsDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort();
+}
+
+// Drops the maps/<dir>/ entries of every map outside the subset, so neither
+// the manifest nor static/ carries them.
+export function filterMapAssets(
+  manifest: AssetManifest,
+  mapDirs: readonly string[] | null,
+): AssetManifest {
+  if (mapDirs === null) return manifest;
+  const keep = new Set(mapDirs);
+  const filtered: AssetManifest = {};
+  for (const [relativePath, url] of Object.entries(manifest)) {
+    const match = /^maps\/([^/]+)\//.exec(relativePath);
+    if (
+      match === null ||
+      keep.has(match[1]) ||
+      ALWAYS_KEPT_MAP_ASSETS.has(relativePath)
+    ) {
+      filtered[relativePath] = url;
+    }
+  }
+  return filtered;
+}

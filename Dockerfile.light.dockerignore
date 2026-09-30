@@ -1,0 +1,17 @@
+# openfront-light: build context of Dockerfile.light (BuildKit picks this file
+# over .dockerignore for that Dockerfile).
+.git
+.github
+.claude
+.vscode
+.idea
+.env*
+node_modules
+static
+out
+dist
+coverage*
+tests
+map-generator
+docs
+Dockerfile*

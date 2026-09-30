@@ -71,6 +71,21 @@ Every background call to the absent API failed and logged, on every start or eve
 - **Startup noise**: `dotenv.config({ quiet: true })` in `Server.ts`, `Logger.ts` and `WorkerMetrics.ts` (no more "injected env ... tip: ..." banner per process), no "No OTLP endpoint ..., remote logging disabled" line in `Logger.ts` (the normal state here; "OTEL enabled" is still printed when it is on), and `index.html` adds `dev-mode` to `globalThis.litIssuedWarnings` so Lit's "Lit is in dev mode" notice is not relayed to the terminal (Lit's other dev warnings still show). `tests/RenderDesktopDescriptor.test.ts` no longer expects the OTLP line.
 - Deliberately kept: Vite's `ws proxy error: ECONNREFUSED`, which can appear once when the browser connects in the ~2 s before the game server's workers listen. It is a real proxy error and would also report a crashed server.
 
+#### 7. Light self-host image (`Dockerfile.light`)
+
+- **Why**: the upstream image (nginx + supervisord + `tsx` + full `node_modules` + every map) is built for openfront.io. A private server for 2-3 games behind a PaaS such as Clever Cloud (one port, TLS at the platform) needs much less. Guide: `docs/SelfHost.md`.
+- **Image**: `Dockerfile.light` (+ `Dockerfile.light.dockerignore`) builds the client, bundles the server with esbuild (`npm run build-server-light`, output `dist/server/Server.mjs`, gitignored), and ships only `static/` + `dist/` on `node:24-alpine`. Defaults: `GAME_ENV=prod`, `PORT=8080`, `WORKER_PROXY=inprocess`, `NUM_WORKERS=1`, `INSTANCE_LETTER=a`, the always-pass Turnstile test key. The upstream `Dockerfile` is unchanged.
+- **Single port** (`src/server/InProcessWorkerProxy.ts`, mounted in `Master.ts`): with `WORKER_PROXY=inprocess` the master forwards `/wN/` HTTP and WebSocket upgrades to worker N and the create-game endpoints to a random worker, replacing the nginx routing. `ServerEnv.masterPort()` reads `PORT` (default 3000). Test: `tests/server/InProcessWorkerProxy.test.ts`.
+- **No `join_verify` call** (`src/server/Worker.ts`): new `ServerEnv.apiEnabled()` (`false`, `setApiEnabledForTests`). Outside Dev, first joins used to call the API's `/join_verify` and fail open after the error. They are now screened locally with `censorPlayer()`, as in Dev.
+- **Map subset**: build-time `OPENFRONT_MAPS` (map directory names; empty = all maps, the upstream behaviour). `parseMapSubset` / `filterMapAssets` in `src/server/PublicAssetManifest.ts` drop the other maps from the asset manifest and `static/` (Australia's preview terrain is always kept for the cosmetics preview). `vite.config.ts` bakes `__ENABLED_MAPS__`, read by `src/client/utilities/EnabledMaps.ts`, which filters `MapPicker.ts`, `getRandomMapType()` (`GameConfigHelpers.ts`) and the default map of `SinglePlayerModal.ts` / `HostLobbyModal.ts`. Tests: `tests/MapSubsetAssets.test.ts`, `tests/client/EnabledMaps.test.ts`.
+- **README**: `README.md` is rewritten for openfront-light (concept, the prebuilt `ghcr.io/tekmath/openfront-light:latest` image and its maps, building your own image, environment variables). The upstream README is not kept.
+
+#### 8. GitHub Actions: checks, then build and publish the light image
+
+- `.github/workflows/ci.yml` is the only pipeline. On every PR and push it runs lint, Prettier, tests, typecheck + `build-server-light`, and the generated-maps check. When they all pass, it builds `Dockerfile.light` for `linux/amd64`. It pushes to GHCR (`ghcr.io/<owner>/openfront-light`, with a registry layer cache under `:buildcache`) only from `main` (`latest`) and `v*` tags. The maps come from the `OPENFRONT_MAPS` repository variable, with the prebuilt-image selection as the default.
+- Removed upstream workflows that deploy to or automate openfront.io: `deploy.yml`, `release.yml`, `pr-gate.yml`, `issue-lifecycle-*.yml`, `pr-author.yml`, `pr-close-on-label.yml`, `pr-description.yml`, `pr-stale.yml`, `cherry-pick-milestone.yml`, `claude-code-review.yml`. The upstream-specific issue templates (`database_request`, `new-contribution-template-*`) are removed too. `scripts/pr-gate/` and `scripts/issue-lifecycle/` are kept (`tests/PrGateRules.test.ts` still covers the former).
+- `.github/PULL_REQUEST_TEMPLATE.md` and `CODEOWNERS` now describe this fork instead of upstream's approved-issue process and teams.
+
 #### Known remaining upstream behaviour
 
 - Other API-backed features (store, clans, account pages, ...) still call the API when a player opens them through a `#modal=` deep link; they are not linked from the menu (see 3).
@@ -344,12 +359,11 @@ Some shell blocks are delimited with `BEGIN ... (tested)` / `END` markers and ex
 
 ### GitHub Actions (`.github/workflows/`)
 
-- `ci.yml`: build (`build-prod`), tests (`test:coverage`), lint (`lint:github`), Prettier check, and a "generated maps up to date" check. Runs on PRs, `main` pushes and the merge queue.
-- `deploy.yml`: deploys branches to `openfront.dev` (one subdomain per branch) and runs a nightly schedule (`nightly`, `blue`, `green` on `staging`). It can also be dispatched manually to another domain or host.
-- `release.yml`: on a published (or edited) GitHub release, builds once and rolls out to `alpha`, then `beta`, then the prod blue/green slots (`DEPLOY_TARGETS_*`).
-- PR and issue bots: `pr-gate.yml` (`scripts/pr-gate/`), `issue-lifecycle-*.yml` (`scripts/issue-lifecycle/`), `pr-description.yml`, `pr-author.yml`, `pr-stale.yml`, `pr-close-on-label.yml`, `cherry-pick-milestone.yml`, `claude-code-review.yml`.
+openfront-light keeps a single workflow (see changelog entry 8):
 
-Environments: local dev (`localhost`), `openfront.dev` (staging and per-branch previews), and `openfront.io` (production, blue/green behind a load balancer). Releases are cut on `vNN` branches as tags `v0.NN.x` (see the `release` skill).
+- `ci.yml`: lint (`lint:github`), Prettier check, tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` from `main` (`latest`, `sha-<short>`) and from `v*` tags (`<tag>`, `sha-<short>`); on PRs it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
+
+Upstream's `deploy.yml`, `release.yml` and PR / issue bot workflows target openfront.io infrastructure and are not used here.
 
 Deploying, pushing images and running `deploy.sh` touch real infrastructure. Never run them unless the user explicitly asks.
 

@@ -1,0 +1,58 @@
+# openfront-light: small single-process image for self-hosting a few private
+# games (see docs/SelfHost.md). Compared with the upstream Dockerfile:
+#   - no nginx / supervisord: the master listens on ONE port ($PORT, 8080) and
+#     forwards /wN/ and WebSocket traffic to its workers itself
+#     (src/server/InProcessWorkerProxy.ts, enabled by WORKER_PROXY=inprocess);
+#     TLS is left to the platform in front (Clever Cloud, a tunnel, ...);
+#   - the server is bundled with esbuild into dist/server/Server.mjs, so the
+#     final image carries no node_modules, no src/ and no tsx;
+#   - only the maps listed in OPENFRONT_MAPS are embedded (all when empty).
+#
+# Build: docker build -f Dockerfile.light \
+#          --build-arg OPENFRONT_MAPS=world,europe,iceland -t openfront-light .
+
+FROM node:24-slim AS build
+WORKDIR /usr/src/app
+RUN npm install --global --ignore-scripts npm@12.1.0
+ENV HUSKY=0
+COPY package*.json .npmrc ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts
+
+COPY tsconfig.json vite.config.ts eslint.config.js index.html client-api.json ./
+COPY resources ./resources
+COPY proprietary ./proprietary
+COPY src ./src
+COPY zbin ./zbin
+COPY scripts ./scripts
+
+# Comma-separated map directory names from resources/maps/ (e.g.
+# "world,europe,iceland"). Empty = every map (~600 MB).
+ARG OPENFRONT_MAPS=""
+ARG GIT_COMMIT=unknown
+ENV OPENFRONT_MAPS="$OPENFRONT_MAPS" GIT_COMMIT="$GIT_COMMIT"
+RUN npm run build-prod && npm run build-server-light \
+    && echo "$GIT_COMMIT" > static/commit.txt
+
+FROM node:24-alpine
+WORKDIR /app
+ARG GIT_COMMIT=unknown
+# Defaults for one self-hosted server. DOMAIN (the page's host name) is the
+# only value to set on the platform; API_KEY / ADMIN_BOT_API_KEY are optional
+# (without ADMIN_BOT_API_KEY the admin bot API stays off).
+ENV NODE_ENV=production \
+    GAME_ENV=prod \
+    GIT_COMMIT="$GIT_COMMIT" \
+    PORT=8080 \
+    WORKER_PROXY=inprocess \
+    NUM_WORKERS=1 \
+    INSTANCE_LETTER=a \
+    TURNSTILE_SITE_KEY=1x00000000000000000000AA \
+    NODE_OPTIONS=--max-old-space-size=384
+
+COPY --from=build --chown=node:node /usr/src/app/static ./static
+COPY --from=build --chown=node:node /usr/src/app/dist ./dist
+
+USER node
+EXPOSE 8080
+CMD ["node", "dist/server/Server.mjs"]

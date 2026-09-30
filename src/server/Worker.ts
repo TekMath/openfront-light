@@ -604,7 +604,10 @@ export async function startWorker() {
         // API. Runs before the rejoin attempt so a pre-start identity
         // change on refresh is screened before it is applied.
         let verifySkipped = false;
-        if (ServerEnv.env() !== GameEnv.Dev) {
+        // openfront-light: without the API there is no join_verify to call
+        // (the call would only fail open after an error), so a self-hosted
+        // prod server screens names locally, like Dev.
+        if (ServerEnv.env() !== GameEnv.Dev && ServerEnv.apiEnabled()) {
           const game = gm.game(clientMsg.gameID);
           const stored = game?.storedIdentity(persistentId) ?? null;
           const isReadmit = game?.wasAdmitted(persistentId) ?? false;

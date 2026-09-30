@@ -31,6 +31,7 @@ import { showInGameAlert } from "./InGameModal";
 import { JoinLobbyEvent } from "./Main";
 import { fallbackPlayerName, ResolvedPlayerName } from "./PlayerName";
 import { UsernameInput } from "./UsernameInput";
+import { defaultMap } from "./utilities/EnabledMaps";
 import {
   getBotsForCompactMap,
   getNationsForCompactMap,
@@ -94,7 +95,8 @@ type StartPreparation = {
 };
 
 const DEFAULT_OPTIONS = {
-  selectedMap: GameMapType.World,
+  // openfront-light: World, or the first embedded map when World is not.
+  selectedMap: defaultMap(),
   selectedDifficulty: Difficulty.Easy,
   bots: 400,
   infiniteGold: false,

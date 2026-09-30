@@ -1,5 +1,6 @@
 import { GameMapType, UnitType } from "../../core/game/Game";
 import { GameConfig } from "../../core/Schemas";
+import { enabledMapTypes } from "./EnabledMaps";
 
 /**
  * Maps a slider value (0-400) to the nations config value.
@@ -124,7 +125,8 @@ export function getNationsForCompactMap(
 }
 
 export function getRandomMapType(): GameMapType {
-  const maps = Object.values(GameMapType);
+  // openfront-light: pick among the maps embedded in this build only.
+  const maps = enabledMapTypes();
   const randIdx = Math.floor(Math.random() * maps.length);
   return maps[randIdx] as GameMapType;
 }

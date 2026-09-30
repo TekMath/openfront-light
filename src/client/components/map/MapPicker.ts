@@ -3,19 +3,23 @@ import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { assetUrl } from "../../../core/AssetUrls";
 import {
+  maps as allMaps,
   Difficulty,
   GameMapType,
   MapCategory,
   mapCategoryOrder,
   MapInfo,
-  maps,
 } from "../../../core/game/Game";
 import { translateText } from "../../Utils";
+import { defaultMap, filterEnabledMaps } from "../../utilities/EnabledMaps";
 import "./MapDisplay";
 import { getFavoriteMaps, starIcon, toggleFavoriteMap } from "./MapFavorites";
 const randomMap = assetUrl("images/RandomMap.webp");
 
 type MapTab = "featured" | "all" | "favorites";
+
+// openfront-light: only the maps embedded in this build (OPENFRONT_MAPS).
+const maps: MapInfo[] = filterEnabledMaps(allMaps);
 
 // Featured grid order: ranked maps first (1 = first), unranked alphabetical.
 const featuredMaps: MapInfo[] = maps
@@ -25,6 +29,9 @@ const featuredMaps: MapInfo[] = maps
       (a.featuredRank ?? Number.MAX_SAFE_INTEGER) -
       (b.featuredRank ?? Number.MAX_SAFE_INTEGER),
   );
+// openfront-light: a map subset may contain no featured map; show them all.
+const featuredMapList: MapInfo[] =
+  featuredMaps.length > 0 ? featuredMaps : maps;
 
 function mapsInCategory(category: MapCategory): MapInfo[] {
   return maps.filter((m) => m.categories.includes(category));
@@ -32,7 +39,7 @@ function mapsInCategory(category: MapCategory): MapInfo[] {
 
 @customElement("map-picker")
 export class MapPicker extends LitElement {
-  @property({ type: String }) selectedMap: GameMapType = GameMapType.World;
+  @property({ type: String }) selectedMap: GameMapType = defaultMap();
   @property({ type: Boolean }) useRandomMap = false;
   @property({ type: Boolean }) showMedals = false;
   @property({ type: Boolean }) randomMapDivider = false;
@@ -72,7 +79,11 @@ export class MapPicker extends LitElement {
   }
 
   private get allCategories(): MapCategory[] {
-    return mapCategoryOrder.filter((categoryKey) => categoryKey !== "featured");
+    // openfront-light: skip categories the embedded map subset leaves empty.
+    return mapCategoryOrder.filter(
+      (categoryKey) =>
+        categoryKey !== "featured" && mapsInCategory(categoryKey).length > 0,
+    );
   }
 
   private toggleExpandAll() {
@@ -177,18 +188,18 @@ export class MapPicker extends LitElement {
   }
 
   private renderFeaturedTab() {
-    let featuredMapList = featuredMaps;
+    let shownFeatured = featuredMapList;
     const selected = maps.find((m) => m.type === this.selectedMap);
     if (
       !this.useRandomMap &&
       selected !== undefined &&
-      !featuredMaps.includes(selected)
+      !featuredMapList.includes(selected)
     ) {
-      featuredMapList = [selected, ...featuredMaps];
+      shownFeatured = [selected, ...featuredMapList];
     }
     return html`<div class="w-full">
       ${this.renderSectionHeading(translateText("map_categories.featured"))}
-      ${this.renderMapGrid(featuredMapList)}
+      ${this.renderMapGrid(shownFeatured)}
     </div>`;
   }
 
