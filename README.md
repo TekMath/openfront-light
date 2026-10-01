@@ -82,6 +82,37 @@ docker run -d --name openfront -p 8080:8080 \
 Open `http://localhost:8080` (or your domain behind your TLS proxy). Then
 click **Create Lobby** and send the lobby link to your friends.
 
+## Quick start: the prebuilt tarball (no Docker)
+
+Each release on the [Releases page](https://github.com/TekMath/openfront-light/releases)
+also carries `openfront-light-<version>.tar.gz`, with the same content and
+maps as the image: the built client (`static/`), the bundled server (`dist/`),
+the runtime defaults (`defaults.env`) and the licenses. You only need Node.js
+`>=24.15 <25`, with no `npm install`.
+
+```bash
+v=v1.0.0
+base=https://github.com/TekMath/openfront-light/releases/download/$v
+curl -fLO "$base/openfront-light-$v.tar.gz"
+curl -fLO "$base/openfront-light-$v.tar.gz.sha256"
+sha256sum -c "openfront-light-$v.tar.gz.sha256"
+mkdir openfront && tar -xzf "openfront-light-$v.tar.gz" -C openfront --strip-components=1
+cd openfront
+DOMAIN=games.example.com GIT_COMMIT="$(cat static/commit.txt)" \
+  node --max-old-space-size=384 --env-file=defaults.env dist/server/Server.mjs
+```
+
+`defaults.env` holds the same defaults as the image. Variables already set in
+the environment win over it. The heap cap goes on the command line, and a
+command-line flag also wins over `NODE_OPTIONS`. `GIT_COMMIT` is optional
+(it falls back to `unknown`); set it from `static/commit.txt` to report the
+release version.
+
+To run it on Clever Cloud without Docker, use
+[cc-openfront](https://github.com/TekMath/cc-openfront): it downloads this
+tarball (or builds from source) and can be deployed from the Console, the CLI
+or Terraform.
+
 ## Build your own image
 
 Build your own image to choose other maps or to include your own changes.
@@ -148,7 +179,12 @@ services:
 
 ### Example: Clever Cloud
 
-Create a **Docker** application from this repository. Then set
+The simplest way is [cc-openfront](https://github.com/TekMath/cc-openfront):
+a **Linux** application that runs the prebuilt tarball, or builds from source
+with your own maps or your own fork. You pick the version and every setting
+with environment variables, from the Console, the CLI or Terraform.
+
+You can also create a **Docker** application from this repository. Then set
 `CC_DOCKERFILE=Dockerfile.light` and `DOMAIN`. To choose the maps, change the
 `ARG OPENFRONT_MAPS=""` default in `Dockerfile.light`. The app listens on
 8080, as Clever expects. Their load balancer handles HTTPS and WebSockets.
@@ -166,9 +202,12 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-This pushes `ghcr.io/tekmath/openfront-light:v1.0.0` and moves `:latest`. A
-pre-release tag such as `v1.1.0-rc.1` only publishes its own tag and leaves
-`:latest` alone. The embedded maps come from the `OPENFRONT_MAPS` repository
+This pushes `ghcr.io/tekmath/openfront-light:v1.0.0` and moves `:latest`. It
+also creates the GitHub release `v1.0.0`, with generated notes and the
+prebuilt tarball `openfront-light-v1.0.0.tar.gz` plus its `.sha256` (built
+from the `artifact` stage of `Dockerfile.light`, with the same maps). A
+pre-release tag such as `v1.1.0-rc.1` only publishes its own image tag, leaves
+`:latest` alone and creates a GitHub pre-release. The embedded maps come from the `OPENFRONT_MAPS` repository
 variable (Settings > Secrets and variables > Actions > Variables), or the
 default list above.
 

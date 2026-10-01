@@ -34,6 +34,17 @@ ENV OPENFRONT_MAPS="$OPENFRONT_MAPS" GIT_COMMIT="$GIT_COMMIT"
 RUN npm run build-prod && npm run build-server-light \
     && echo "$GIT_COMMIT" > static/commit.txt
 
+# openfront-light: the prebuilt release tarball (static/ + dist/ + the runtime
+# defaults + licenses), exported by CI with
+#   docker buildx build --target artifact --output type=local,dest=<dir> ...
+# It runs with a plain Node 24 (no node_modules), see deploy/defaults.env. The
+# last stage below stays the default target, so a plain build still produces
+# the runtime image.
+FROM scratch AS artifact
+COPY --from=build /usr/src/app/static ./static
+COPY --from=build /usr/src/app/dist ./dist
+COPY deploy/defaults.env LICENSE LICENSE-ASSETS LICENSING.md ./
+
 FROM node:24-alpine
 WORKDIR /app
 ARG GIT_COMMIT=unknown

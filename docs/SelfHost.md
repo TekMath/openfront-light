@@ -51,9 +51,48 @@ docker run -p 8080:8080 -e DOMAIN=games.example.com openfront-light
 Leave `SUBDOMAIN` and `LOBBY_COORDINATOR` unset. The server then never
 contacts the closed-source API.
 
+## Prebuilt tarball (no Docker)
+
+Every `v*` tag also publishes a GitHub release with
+`openfront-light-<tag>.tar.gz` and its `.sha256`. CI builds it from the
+`artifact` stage of `Dockerfile.light`, with the same maps and version as the
+image:
+
+```bash
+docker buildx build -f Dockerfile.light --target artifact \
+  --build-arg OPENFRONT_MAPS=world --build-arg GIT_COMMIT=v1.0.0 \
+  --output type=local,dest=out/openfront-light-v1.0.0 .
+```
+
+The tarball has one top-level folder (extract it with `--strip-components=1`)
+holding `static/`, `dist/`, `defaults.env`, `LICENSE`, `LICENSE-ASSETS` and
+`LICENSING.md`. Run it with Node.js `>=24.15 <25` and no `node_modules`:
+
+```bash
+DOMAIN=games.example.com GIT_COMMIT="$(cat static/commit.txt)" \
+  node --max-old-space-size=384 --env-file=defaults.env dist/server/Server.mjs
+```
+
+- `defaults.env` holds the image's `ENV` defaults except `NODE_OPTIONS`. Node
+  never overrides a variable that is already set, so the platform's values
+  (`PORT`, `DOMAIN`, ...) win over the file (checked on Node 24.21).
+- A `--max-old-space-size` flag on the command line wins over the same flag in
+  `NODE_OPTIONS`. To raise the heap through `NODE_OPTIONS`, drop the flag from
+  the command line. Workers inherit the flags and the environment.
+- The server refuses to start without `GIT_COMMIT`. `defaults.env` sets it to
+  `unknown`; export it from `static/commit.txt` to report the release version.
+- `DOMAIN` is required: without it, every page render fails.
+- The server finds `static/` next to `dist/` from its own path, so the current
+  directory does not matter.
+
 ## Clever Cloud
 
-Create a **Docker** application from this repository, and set
+[cc-openfront](https://github.com/TekMath/cc-openfront) deploys the tarball
+(or a build from source, with your own maps or fork) as a **Linux**
+application, configured only through environment variables. Use it from the
+Console, `clever` or Terraform.
+
+Alternatively, create a **Docker** application from this repository, and set
 `CC_DOCKERFILE=Dockerfile.light` and `DOMAIN`. To pick the maps when you
 cannot pass build args, change the `ARG OPENFRONT_MAPS=""` default in
 `Dockerfile.light`. The app listens on 8080, which Clever expects. Their load

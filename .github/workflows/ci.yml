@@ -1,8 +1,9 @@
 # openfront-light: one pipeline for the fork. Checks run on every PR and push;
 # the light image (Dockerfile.light) is built once they all pass. It is pushed
 # to GitHub Container Registry only when a v* tag is pushed, and tagged with
-# that version (see the image job). Upstream's deploy / release workflows
-# target openfront.io infrastructure and are gone.
+# that version (see the image job). The same tag also creates a GitHub release
+# with the prebuilt tarball (openfront-light-<tag>.tar.gz + .sha256). Upstream's
+# deploy / release workflows target openfront.io infrastructure and are gone.
 name: 🧪 CI
 
 on:
@@ -133,7 +134,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: read
+      # write: a v* tag also creates the GitHub release carrying the tarball.
+      contents: write
       packages: write
     env:
       # Maps embedded in the published image. Override them with the
@@ -196,6 +198,47 @@ jobs:
 
           docker buildx create --use --driver docker-container >/dev/null
           docker buildx build "${args[@]}" .
+      # The prebuilt tarball (Dockerfile.light `artifact` stage): the same
+      # static/ + dist/ as the image, plus deploy/defaults.env and the
+      # licenses. It is what cc-openfront downloads to run without Docker.
+      - name: 📦 Build release tarball
+        if: env.PUSH == 'true'
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="$GITHUB_REF_NAME"
+          name="openfront-light-${version}"
+          # Same maps, version, platform and layer cache as the image above,
+          # so the build stage comes straight from the cache.
+          docker buildx build \
+            --file Dockerfile.light \
+            --target artifact \
+            --platform linux/amd64 \
+            --build-arg "OPENFRONT_MAPS=${OPENFRONT_MAPS}" \
+            --build-arg "GIT_COMMIT=${version}" \
+            --cache-from "type=registry,ref=${image}:buildcache" \
+            --output "type=local,dest=out/${name}" \
+            .
+          # One top-level folder, so consumers extract with --strip-components=1.
+          tar -C out -czf "${name}.tar.gz" "${name}"
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          cat "${name}.tar.gz.sha256"
+      - name: 🚀 Create GitHub release
+        if: env.PUSH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$GITHUB_REF_NAME"
+          name="openfront-light-${version}"
+          flags=(--generate-notes --verify-tag)
+          # Same rule as :latest: a tag with a "-" (v1.2.0-rc.1) is a pre-release.
+          if [[ "$version" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$version" "${flags[@]}" \
+            --title "$version" \
+            "${name}.tar.gz" "${name}.tar.gz.sha256"
       - name: 📝 Summary
         if: env.PUSH == 'true'
         run: |
@@ -205,6 +248,8 @@ jobs:
             echo ""
             echo "- \`${image}:${GITHUB_REF_NAME}\`"
             if [[ "$GITHUB_REF_NAME" != *-* ]]; then echo "- \`${image}:latest\`"; fi
+            echo ""
+            echo "Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME} (\`openfront-light-${GITHUB_REF_NAME}.tar.gz\`)"
             echo ""
             echo "Maps: \`${OPENFRONT_MAPS}\`"
           } >> "$GITHUB_STEP_SUMMARY"

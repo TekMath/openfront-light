@@ -86,6 +86,14 @@ Every background call to the absent API failed and logged, on every start or eve
 - Removed upstream workflows that deploy to or automate openfront.io: `deploy.yml`, `release.yml`, `pr-gate.yml`, `issue-lifecycle-*.yml`, `pr-author.yml`, `pr-close-on-label.yml`, `pr-description.yml`, `pr-stale.yml`, `cherry-pick-milestone.yml`, `claude-code-review.yml`. The upstream-specific issue templates (`database_request`, `new-contribution-template-*`) are removed too. `scripts/pr-gate/` and `scripts/issue-lifecycle/` are kept (`tests/PrGateRules.test.ts` still covers the former).
 - `.github/PULL_REQUEST_TEMPLATE.md` and `CODEOWNERS` now describe this fork instead of upstream's approved-issue process and teams.
 
+#### 9. Prebuilt release tarball (run without Docker)
+
+- **Why**: platforms that run a plain Node process (Clever Cloud's Linux runtime through [cc-openfront](https://github.com/TekMath/cc-openfront), a VM, ...) should not need Docker, nor a 5-minute client build, to run a release. The tarball is exactly what the image ships.
+- **`Dockerfile.light`**: new `FROM scratch AS artifact` stage between `build` and the runtime stage. It holds `static/`, `dist/`, `defaults.env`, `LICENSE`, `LICENSE-ASSETS` and `LICENSING.md`. The runtime stage stays last, so it remains the default target: a plain `docker build -f Dockerfile.light .` gives the same image ID as before (checked), and the `build` stage is unchanged.
+- **`deploy/defaults.env`**: the image's `ENV` defaults for `node --env-file=defaults.env`, without `NODE_OPTIONS` (the heap cap goes on the command line, which also wins over `NODE_OPTIONS`). Node never overrides a variable already set in the environment, so platform values win (checked on Node 24.21). It sets `GIT_COMMIT=unknown` because `ServerEnv.gitCommit()` throws without it; launchers export the real value from `static/commit.txt`.
+- **Docs**: `docs/SelfHost.md` ("Prebuilt tarball", Clever Cloud points to cc-openfront).
+- **CI** (`.github/workflows/ci.yml`, `image` job, now `contents: write`): on a `v*` tag only, after the image push, it builds `--target artifact` with the same maps, `GIT_COMMIT`, platform and registry cache as the image, packs it as `openfront-light-<tag>.tar.gz` (one top-level folder `openfront-light-<tag>/`, for `--strip-components=1`) plus a `.sha256`, and runs `gh release create <tag> --generate-notes` with both files (`--prerelease` when the tag contains `-`). `README.md` documents the tarball and the release.
+
 #### Known remaining upstream behaviour
 
 - Other API-backed features (store, clans, account pages, ...) still call the API when a player opens them through a `#modal=` deep link; they are not linked from the menu (see 3).
@@ -361,7 +369,7 @@ Some shell blocks are delimited with `BEGIN ... (tested)` / `END` markers and ex
 
 openfront-light keeps a single workflow (see changelog entry 8):
 
-- `ci.yml`: lint (`lint:github`), Prettier check, tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
+- `ci.yml`: lint (`lint:github`), Prettier check, tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). The same tag creates a GitHub release with the prebuilt tarball (`openfront-light-<tag>.tar.gz` + `.sha256`, changelog entry 9). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
 
 Upstream's `deploy.yml`, `release.yml` and PR / issue bot workflows target openfront.io infrastructure and are not used here.
 
