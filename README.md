@@ -207,7 +207,9 @@ also creates the GitHub release `v1.0.0`, with generated notes and the
 prebuilt tarball `openfront-light-v1.0.0.tar.gz` plus its `.sha256` (built
 from the `artifact` stage of `Dockerfile.light`, with the same maps). A
 pre-release tag such as `v1.1.0-rc.1` only publishes its own image tag, leaves
-`:latest` alone and creates a GitHub pre-release. The embedded maps come from the `OPENFRONT_MAPS` repository
+`:latest` alone and creates a GitHub pre-release. A release created by hand in
+the GitHub UI also works: its tag starts the same run, which then attaches the
+tarball to that release and keeps its notes. The embedded maps come from the `OPENFRONT_MAPS` repository
 variable (Settings > Secrets and variables > Actions > Variables), or the
 default list above.
 

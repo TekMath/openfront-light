@@ -239,6 +239,27 @@ describe("JoinLobbyModal spectate link", () => {
   });
 });
 
+// openfront-light: there is no archive API, so a lobby the game server no
+// longer knows must answer "not found" without fetching api.<domain>
+// (localhost:8787 in dev, a CORS error from another machine).
+describe("JoinLobbyModal archive lookup without the API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("answers not_found without fetching the archive", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("no API here");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const modal = new JoinLobbyModal();
+    expect(await (modal as any).checkArchivedGame("akprmCiRVM")).toBe(
+      "not_found",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 // OPE-205. Steam's invite dialog is reachable only through the in-game
 // overlay, so this button is desktop-shell-only: desktopPresence.isAvailable()
 // checks shell.api >= 2, which is false in a browser and on an older depot's

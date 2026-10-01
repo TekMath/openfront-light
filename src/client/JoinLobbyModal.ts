@@ -22,6 +22,7 @@ import {
 } from "../core/Schemas";
 import { GameMode, GameType, HumansVsNations } from "../core/game/Game";
 import { getApiBase } from "./Api";
+import { apiEnabled } from "./ApiBase";
 import { crazyGamesSDK } from "./CrazyGamesSDK";
 import { PublicLobbySocket } from "./LobbySocket";
 import { JoinLobbyEvent } from "./Main";
@@ -1168,6 +1169,13 @@ export class JoinLobbyModal extends BaseModal {
   ): Promise<
     "success" | "redirected" | "not_found" | "version_mismatch" | "error"
   > {
+    // openfront-light: finished games are archived by the closed-source API,
+    // which a self-hosted server does not have. Asking it would only fail
+    // (a CORS / network error against api.<domain>, or localhost:8787 in dev)
+    // and show "error"; a lobby the game server no longer knows is simply
+    // not found.
+    if (!apiEnabled()) return "not_found";
+
     const archiveResponse = await fetch(`${getApiBase()}/game/${lobbyId}`, {
       method: "GET",
       headers: {

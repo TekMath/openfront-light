@@ -233,6 +233,15 @@ jobs:
           set -euo pipefail
           version="$GITHUB_REF_NAME"
           name="openfront-light-${version}"
+          # A release drafted or published in the GitHub UI creates the tag,
+          # so it already exists when this run starts. Attach the tarball to
+          # it (keeping its notes) instead of failing; --clobber also lets a
+          # re-run replace the assets.
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" --clobber \
+              "${name}.tar.gz" "${name}.tar.gz.sha256"
+            exit 0
+          fi
           flags=(--generate-notes --verify-tag)
           # Same rule as :latest: a tag with a "-" (v1.2.0-rc.1) is a pre-release.
           if [[ "$version" == *-* ]]; then
