@@ -23,7 +23,10 @@ export async function verifyClientToken(
   token: string,
 ): Promise<TokenVerificationResult> {
   if (PersistentIdSchema.safeParse(token).success) {
-    if (ServerEnv.env() === GameEnv.Dev) {
+    // openfront-light: without the API nothing issues JWTs, so every client
+    // is signed out and sends its bare persistentID, as in Dev. Refusing it
+    // outside Dev would reject every create_game and every join.
+    if (ServerEnv.env() === GameEnv.Dev || !ServerEnv.apiEnabled()) {
       return { type: "success", persistentId: token, claims: null };
     } else {
       return {

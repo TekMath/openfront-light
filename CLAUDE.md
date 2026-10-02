@@ -95,6 +95,11 @@ Every background call to the absent API failed and logged, on every start or eve
 - **Docs**: `docs/SelfHost.md` ("Prebuilt tarball", Clever Cloud points to cc-openfront).
 - **CI** (`.github/workflows/ci.yml`, `image` job, now `contents: write`): on a `v*` tag only, after the image push, it builds `--target artifact` with the same maps, `GIT_COMMIT`, platform and registry cache as the image, packs it as `openfront-light-<tag>.tar.gz` (one top-level folder `openfront-light-<tag>/`, for `--strip-components=1`) plus a `.sha256`, and runs `gh release create <tag> --generate-notes` with both files (`--prerelease` when the tag contains `-`). If the release already exists (created in the GitHub UI, which pushes the tag and so starts this run), it uploads both files to it with `gh release upload --clobber` instead, keeping its notes; the v1.0.0 runs failed on "a release with the same tag name already exists" before this. `README.md` documents the tarball and the release.
 
+#### 10. Bare persistentID accepted as the auth token outside Dev
+
+- **Problem**: on a deployed light server (`GAME_ENV=prod`), creating a lobby failed with `401 {"error":"Invalid creator token"}`. With no API, no client ever has a JWT (`userAuth()` answers "signed out", entry 6), so it sends its bare persistentID, and `verifyClientToken()` only accepted that in Dev ("persistent ID not allowed in production"). The same check guards WebSocket joins and rejoins. Local `npm run dev` hid it because it runs in Dev.
+- **Fix** (`src/server/jwt.ts`): a persistentID token is accepted in Dev **or** when `ServerEnv.apiEnabled()` is false (the light default). JWTs are still verified when sent. Test: `tests/server/PersistentIdTokenLight.test.ts`.
+
 #### Known remaining upstream behaviour
 
 - Other API-backed features (store, clans, account pages, ...) still call the API when a player opens them through a `#modal=` deep link; they are not linked from the menu (see 3).
