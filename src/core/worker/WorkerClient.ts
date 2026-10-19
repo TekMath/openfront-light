@@ -1,4 +1,4 @@
-import { getCdnBase } from "../AssetUrls";
+import { getCdnBase, workerCdnBase } from "../AssetUrls";
 import {
   BuildableUnit,
   Cell,
@@ -95,7 +95,9 @@ export class WorkerClient {
         id: messageId,
         gameStartInfo: this.gameStartInfo,
         clientID: this.clientID,
-        cdnBase: getCdnBase(),
+        // openfront-light: absolute even when CDN_BASE is empty, see
+        // workerCdnBase().
+        cdnBase: workerCdnBase(getCdnBase(), globalThis.location.origin),
         snapshot: this.snapshotToRestore,
       });
 

@@ -104,6 +104,16 @@ export function getCdnBase(): string {
   return globalThis.__CDN_BASE__ ?? "";
 }
 
+// openfront-light: the game worker is an inlined Blob worker (WorkerClient.ts),
+// and a Blob worker has no base URL, so a same-origin asset URL such as
+// "/_assets/maps/world/manifest.<hash>.json" cannot be fetched from it
+// ("Failed to parse URL"). Upstream always sets CDN_BASE to an absolute origin
+// in production; the light server serves assets itself with an empty
+// CDN_BASE, so the worker gets the page origin instead.
+export function workerCdnBase(cdnBase: string, pageOrigin: string): string {
+  return cdnBase !== "" ? cdnBase : pageOrigin;
+}
+
 export function assetUrl(path: string): string {
   return buildAssetUrl(path, getAssetManifest(), getCdnBase());
 }

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { buildAssetUrl, rewriteAssetsForCdn } from "../src/core/AssetUrls";
+import {
+  buildAssetUrl,
+  rewriteAssetsForCdn,
+  workerCdnBase,
+} from "../src/core/AssetUrls";
 
 describe("AssetUrls", () => {
   test("returns hashed URLs for direct asset matches", () => {
@@ -160,5 +164,24 @@ describe("rewriteAssetsForCdn", () => {
   test("does not match data-src or other custom attributes", () => {
     const html = `<img data-src="/assets/foo.png">`;
     expect(rewriteAssetsForCdn(html)).toBe(html);
+  });
+
+  // openfront-light: the Blob game worker cannot resolve relative URLs.
+  test("gives the worker the page origin when CDN_BASE is empty", () => {
+    const base = workerCdnBase("", "https://play.example.com");
+    expect(base).toBe("https://play.example.com");
+    expect(
+      buildAssetUrl(
+        "maps/world/manifest.json",
+        { "maps/world/manifest.json": "/_assets/maps/world/manifest.h.json" },
+        base,
+      ),
+    ).toBe("https://play.example.com/_assets/maps/world/manifest.h.json");
+  });
+
+  test("keeps a configured CDN base for the worker", () => {
+    expect(
+      workerCdnBase("https://cdn.example.com", "https://play.example.com"),
+    ).toBe("https://cdn.example.com");
   });
 });

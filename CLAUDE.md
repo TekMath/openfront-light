@@ -100,6 +100,11 @@ Every background call to the absent API failed and logged, on every start or eve
 - **Problem**: on a deployed light server (`GAME_ENV=prod`), creating a lobby failed with `401 {"error":"Invalid creator token"}`. With no API, no client ever has a JWT (`userAuth()` answers "signed out", entry 6), so it sends its bare persistentID, and `verifyClientToken()` only accepted that in Dev ("persistent ID not allowed in production"). The same check guards WebSocket joins and rejoins. Local `npm run dev` hid it because it runs in Dev.
 - **Fix** (`src/server/jwt.ts`): a persistentID token is accepted in Dev **or** when `ServerEnv.apiEnabled()` is false (the light default). JWTs are still verified when sent. Test: `tests/server/PersistentIdTokenLight.test.ts`.
 
+#### 11. Absolute asset URLs in the game worker when `CDN_BASE` is empty
+
+- **Problem**: on a deployed light server, starting any game (solo or multiplayer) hung on the loading screen. The browser console showed `Failed to execute 'fetch' on 'WorkerGlobalScope': Failed to parse URL from /_assets/maps/world/manifest.<hash>.json`. The game worker is an inlined Blob worker (`?worker&inline`, `src/core/worker/WorkerClient.ts`), which has no base URL to resolve relative URLs against. Upstream always sets `CDN_BASE` to an absolute origin in production; the light server serves its own assets with an empty `CDN_BASE`, so the worker got relative URLs. `npm run dev` hid it because Vite serves the worker from a real URL in dev.
+- **Fix**: new `workerCdnBase()` in `src/core/AssetUrls.ts`; `WorkerClient` sends the page origin as the worker's `cdnBase` when `CDN_BASE` is empty. Test: `tests/AssetUrls.test.ts`.
+
 #### Known remaining upstream behaviour
 
 - Other API-backed features (store, clans, account pages, ...) still call the API when a player opens them through a `#modal=` deep link; they are not linked from the menu (see 3).
