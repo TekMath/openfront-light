@@ -15,3 +15,8 @@ tests
 map-generator
 docs
 Dockerfile*
+# Dev scripts that import from tests/ (excluded above); tsconfig includes them,
+# so the build's `tsc --noEmit` would fail on the missing imports. Upstream's
+# .dockerignore excludes them too.
+scripts/replay/
+scripts/split-packages/
