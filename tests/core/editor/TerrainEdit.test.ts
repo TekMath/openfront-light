@@ -296,7 +296,9 @@ describe("terrain edits reproduce a stock map's files", () => {
     e.apply({ type: "end_terrain_edit" });
     expectShipped(e, s);
     expectExported(e, s);
-  });
+    // openfront-light: same timeout as the tests below. It takes ~6.6 s under
+    // coverage on this fork's GitHub runners, over Vitest's 5 s default.
+  }, 30_000);
 
   test("More Than Luck, with impassable terrain, as one stroke", async () => {
     const s = shipped("morethanluck");
