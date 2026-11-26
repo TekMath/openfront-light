@@ -1,3 +1,4 @@
+import type { StorePlacement } from "@openfront/shared/ApiSchemas";
 import type {
   StripeExpressCheckoutElement,
   StripeExpressCheckoutElementConfirmEvent,
@@ -16,6 +17,7 @@ import {
   type InlineConfirmResult,
 } from "../StripeInline";
 import { translateText } from "../Utils";
+import { hasPendingPurchase } from "./inventory/PendingEquip";
 
 /**
  * The webhook grants the entitlement, so the balance read immediately after a
@@ -31,6 +33,8 @@ export interface InlineCheckoutConfig {
   /** Seeds Stripe's payment sheet; the server prices the real intent. */
   amountCents: number;
   successMessageKey: string;
+  /** Resolved when the purchase is made, not when the tile renders. */
+  placement?: () => StorePlacement | undefined;
 }
 
 /**
@@ -52,6 +56,7 @@ export interface InlineCheckoutConfig {
 export class InlineCheckout extends LitElement {
   @property({ type: Object }) request: PurchaseRequest | null = null;
   /** Seeds Stripe's payment sheet; the server prices the real intent. */
+  @property({ type: Function }) placement?: () => StorePlacement | undefined;
   @property({ type: Number }) amountCents = 0;
   /** Display price, e.g. "$4.99". Labels the price and pay buttons. */
   @property({ type: String }) priceLabel = "";
@@ -109,7 +114,7 @@ export class InlineCheckout extends LitElement {
       return Promise.resolve(null);
     }
     this.sessionPromise ??= InlineCheckoutSession.create(
-      this.request,
+      this.requestWithPlacement()!,
       this.amountCents,
     )
       .then((session) => {
@@ -147,11 +152,24 @@ export class InlineCheckout extends LitElement {
   private syncedKey: string | null = null;
 
   private syncSession(): void {
-    if (this.session === null || this.request === null) return;
-    const key = JSON.stringify([this.request, this.amountCents]);
+    const request = this.requestWithPlacement();
+    if (this.session === null || request === null) return;
+    const key = JSON.stringify([request, this.amountCents]);
     if (key === this.syncedKey) return;
     this.syncedKey = key;
-    this.session.update(this.request, this.amountCents);
+    this.session.update(request, this.amountCents);
+  }
+
+  /** The request with the store placement as of now (store analytics). */
+  private requestWithPlacement(): PurchaseRequest | null {
+    if (this.request === null) return null;
+    let placement: StorePlacement | undefined;
+    try {
+      placement = this.placement?.();
+    } catch {
+      // Analytics must never break a purchase.
+    }
+    return placement ? { ...this.request, placement } : this.request;
   }
 
   protected firstUpdated() {
@@ -175,9 +193,11 @@ export class InlineCheckout extends LitElement {
    */
   private async needsEmail(): Promise<boolean> {
     const me = await getUserMe();
-    // A Google login carries its own email (user.google.email, never the
-    // top-level field) and already makes the account recoverable — asking
-    // again would collect a second, different address on every purchase.
+    // A Google or Apple login carries its own email (user.google.email,
+    // user.apple.email, never the top-level field) and already makes the
+    // account recoverable — asking again would collect a second, different
+    // address on every purchase. Unlike Google, Apple may share no email at
+    // all, so only an Apple identity that has one counts.
     //
     // `me === false` is NOT "guest": getUserMe collapses signed-out and any
     // transient /users/@me failure into the same false (memoized for the
@@ -189,7 +209,9 @@ export class InlineCheckout extends LitElement {
     // this function exists to prevent (and the API refuses that attach
     // anyway), while a guest purchase without receipt_email merely skips
     // the recovery attach for that one purchase.
-    return me !== false && !me.user.email && !me.user.google;
+    return (
+      me !== false && !me.user.email && !me.user.google && !me.user.apple?.email
+    );
   }
 
   private async initWallet(): Promise<void> {
@@ -227,6 +249,8 @@ export class InlineCheckout extends LitElement {
       // The wallet sheet's email field (present when the account has none)
       // arrives on the confirm event; ride it on the intent so the webhook
       // can attach it to the account.
+      // The tile may have moved (flash, tab) since the session was made.
+      this.syncSession();
       const result = await this.session.confirm({
         receiptEmail: event.billingDetails?.email ?? null,
       });
@@ -323,6 +347,8 @@ export class InlineCheckout extends LitElement {
     this.confirming = true;
     this.modalError = null;
     try {
+      // The tile may have moved (flash, tab) since the session was made.
+      this.syncSession();
       const result = await this.session.confirm({
         receiptEmail: this.emailRequired ? this.emailValue.trim() : null,
       });
@@ -363,6 +389,22 @@ export class InlineCheckout extends LitElement {
       // head start.
       await showInGameAlert(translateText(this.successMessageKey));
       invalidateUserMe();
+      // A Plutonium top-up for an item from the end screen ("Get
+      // Plutonium"): reload straight onto the purchase landing, marked
+      // resume, which then opens the Store on that item (waiting for the
+      // Plutonium if it hasn't landed). replaceState, so no hashchange runs
+      // the landing before the reload. Never after a subscription.
+      if (
+        (this.request?.kind === "currency_pack" ||
+          this.request?.kind === "custom_currency") &&
+        hasPendingPurchase()
+      ) {
+        history.replaceState(
+          null,
+          "",
+          `${window.location.pathname}${window.location.search}#purchase-completed?status=true&type=currency_pack&resume=1`,
+        );
+      }
       window.location.reload();
       return;
     }
@@ -414,24 +456,26 @@ export class InlineCheckout extends LitElement {
           data-express-checkout
           class=${this.walletVisible ? "w-full" : "hidden"}
         ></div>
-        ${this.walletVisible
-          ? html`<button
-              data-pay-with-card
-              class="w-full border-0 bg-transparent py-1 text-center text-xs font-semibold text-blue-300 underline underline-offset-2 cursor-pointer transition-colors duration-200 hover:text-white disabled:opacity-50"
-              ?disabled=${this.fallbackBusy || this.confirming}
-              @click=${(e: Event) => this.onPriceClick(e)}
-            >
-              ${translateText("store.pay_with_card")}
-            </button>`
-          : html`<button
-              class="purchase-sparkle-btn relative overflow-hidden w-full min-h-11 px-2 py-1.5 bg-blue-500/20 text-blue-300 border border-blue-500/40 rounded-lg text-base font-bold cursor-pointer transition-all duration-200 flex items-center justify-center
+        ${
+          this.walletVisible
+            ? html`<button
+                data-pay-with-card
+                class="w-full border-0 bg-transparent py-1 text-center text-xs font-semibold text-blue-300 underline underline-offset-2 cursor-pointer transition-colors duration-200 hover:text-white disabled:opacity-50"
+                ?disabled=${this.fallbackBusy || this.confirming}
+                @click=${(e: Event) => this.onPriceClick(e)}
+              >
+                ${translateText("store.pay_with_card")}
+              </button>`
+            : html`<button
+                class="purchase-sparkle-btn relative overflow-hidden w-full min-h-11 px-2 py-1.5 bg-blue-500/20 text-blue-300 border border-blue-500/40 rounded-lg text-base font-bold cursor-pointer transition-all duration-200 flex items-center justify-center
                hover:bg-blue-600 hover:border-blue-400 hover:text-white hover:shadow-[0_0_20px_rgba(96,165,250,0.6)] disabled:opacity-50"
-              ?disabled=${this.fallbackBusy || this.confirming}
-              @click=${(e: Event) => this.onPriceClick(e)}
-            >
-              <span class="purchase-sparkle-streak"></span>
-              ${label}
-            </button>`}
+                ?disabled=${this.fallbackBusy || this.confirming}
+                @click=${(e: Event) => this.onPriceClick(e)}
+              >
+                <span class="purchase-sparkle-streak"></span>
+                ${label}
+              </button>`
+        }
       </div>
     `;
   }
@@ -458,46 +502,54 @@ export class InlineCheckout extends LitElement {
           <h2 class="text-lg font-bold text-white mb-4 pr-8">
             ${translateText("store.pay_with_card")}
           </h2>
-          ${this.emailRequired
-            ? html`<label
-                  class="mb-1 block text-xs font-medium text-white/70"
-                  for="inline-checkout-email"
-                  >${translateText("store.card_email_label")}</label
-                >
-                <input
-                  id="inline-checkout-email"
-                  data-checkout-email
-                  type="email"
-                  autocomplete="email"
-                  .value=${this.emailValue}
-                  ?disabled=${this.confirming}
-                  @input=${(e: Event) => {
-                    this.emailValue = (e.target as HTMLInputElement).value;
-                  }}
-                  class="mb-1 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                />
-                <p class="mb-3 text-xs text-white/50">
-                  ${translateText("store.card_email_hint")}
-                </p>`
-            : nothing}
+          ${
+            this.emailRequired
+              ? html`<label
+                    class="mb-1 block text-xs font-medium text-white/70"
+                    for="inline-checkout-email"
+                    >${translateText("store.card_email_label")}</label
+                  >
+                  <input
+                    id="inline-checkout-email"
+                    data-checkout-email
+                    type="email"
+                    autocomplete="email"
+                    .value=${this.emailValue}
+                    ?disabled=${this.confirming}
+                    @input=${(e: Event) => {
+                      this.emailValue = (e.target as HTMLInputElement).value;
+                    }}
+                    class="mb-1 w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                  />
+                  <p class="mb-3 text-xs text-white/50">
+                    ${translateText("store.card_email_hint")}
+                  </p>`
+              : nothing
+          }
           <div data-payment-element class="mb-4 min-h-[6rem]"></div>
-          ${this.modalError !== null
-            ? html`<p class="mb-4 text-sm font-medium text-red-300">
-                ${this.modalError}
-              </p>`
-            : nothing}
+          ${
+            this.modalError !== null
+              ? html`<p class="mb-4 text-sm font-medium text-red-300">
+                  ${this.modalError}
+                </p>`
+              : nothing
+          }
           <button
             @click=${() => void this.confirmCard()}
-            ?disabled=${this.confirming ||
-            !this.cardReady ||
-            (this.emailRequired && !this.emailLooksValid())}
+            ?disabled=${
+              this.confirming ||
+              !this.cardReady ||
+              (this.emailRequired && !this.emailLooksValid())
+            }
             class="w-full min-h-11 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-base font-bold hover:bg-blue-700 transition-all disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
           >
-            ${this.confirming
-              ? html`<span
-                  class="inline-block h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin"
-                ></span>`
-              : nothing}
+            ${
+              this.confirming
+                ? html`<span
+                    class="inline-block h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin"
+                  ></span>`
+                : nothing
+            }
             ${translateText("store.pay_amount", { amount: this.priceLabel })}
           </button>
         </div>

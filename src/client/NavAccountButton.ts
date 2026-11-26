@@ -1,4 +1,4 @@
-import { UserMeResponse } from "../core/ApiSchemas";
+import { UserMeResponse } from "@openfront/shared/ApiSchemas";
 import { responseHasLinkedIdentity } from "./AccountIdentity";
 import { getDiscordAvatarUrl, translateText } from "./Utils";
 
@@ -180,10 +180,13 @@ function updateInstance(
     return;
   }
 
-  // Google logins have no avatar; show the same person/email badge as magic-link.
+  // Google and Apple logins have no avatar; show the same person/email badge
+  // as magic-link.
   const google =
     userMeResponse !== false ? userMeResponse.user.google : undefined;
-  if (google) {
+  const apple =
+    userMeResponse !== false ? userMeResponse.user.apple : undefined;
+  if (google || apple) {
     showEmailLoggedIn();
     return;
   }

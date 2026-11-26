@@ -1,4 +1,9 @@
 // openfront-light: map subset of the light self-host image (OPENFRONT_MAPS).
+import {
+  GameMapType,
+  listedMaps,
+  maps,
+} from "@openfront/engine-api/game/GameTypes";
 import { describe, expect, it } from "vitest";
 import {
   defaultMap,
@@ -7,11 +12,10 @@ import {
   isMapEnabled,
   mapDirName,
 } from "../../src/client/utilities/EnabledMaps";
-import { GameMapType, maps } from "../../src/core/game/Game";
 
 describe("EnabledMaps", () => {
   it("enables every map when no subset is baked in", () => {
-    expect(enabledMapTypes()).toEqual(Object.values(GameMapType));
+    expect(enabledMapTypes()).toEqual(listedMaps.map((m) => m.type));
     expect(filterEnabledMaps(maps)).toHaveLength(maps.length);
     expect(defaultMap()).toBe(GameMapType.World);
   });

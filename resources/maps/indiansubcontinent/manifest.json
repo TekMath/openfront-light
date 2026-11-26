@@ -16,7 +16,6 @@
     "num_land_tiles": 519188,
     "width": 1000
   },
-  "multiplayer_frequency": 8,
   "name": "Indian Subcontinent",
   "nations": [
     {
@@ -67,7 +66,7 @@
     {
       "coordinates": [1799, 1466],
       "flag": "in",
-      "name": "Andaman \u0026 Nicobar Islands"
+      "name": "Andaman & Nicobar Islands"
     },
     {
       "coordinates": [632, 1566],

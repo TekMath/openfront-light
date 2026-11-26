@@ -35,16 +35,19 @@ vi.mock("../../../../src/client/Utils", () => ({
     const text = translations[key] ?? key;
     return params ? `${text} ${JSON.stringify(params)}` : text;
   }),
-  renderNumber: vi.fn(),
-  renderTroops: vi.fn(),
   getMessageTypeClasses: vi.fn(() => ""),
+  severityColors: {},
+}));
+vi.mock("@openfront/engine-lib/Format", () => ({
+  renderNumber: vi.fn(),
+  renderTroops: vi.fn((troops: number) => String(troops)),
 }));
 
+import { MessageType } from "@openfront/engine-api/game/GameTypes";
+import { GameUpdateType } from "@openfront/engine-api/game/GameUpdates";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventsDisplay } from "../../../../src/client/hud/layers/EventsDisplay";
 import { PlaySoundEffectEvent } from "../../../../src/client/sound/Sounds";
-import { MessageType } from "../../../../src/core/game/Game";
-import { GameUpdateType } from "../../../../src/core/game/GameUpdates";
 
 interface Ed {
   events: { description: string; type: MessageType; focusID?: number }[];
@@ -60,6 +63,7 @@ describe("EventsDisplay handlers", () => {
     displayName: () => "Me",
     isAlive: () => true,
     isFriendly: (p: { smallID: () => number }) => p.smallID() === 2,
+    isRequestingAllianceWith: () => true,
   };
   const friend = {
     smallID: () => 2,
@@ -87,10 +91,17 @@ describe("EventsDisplay handlers", () => {
     game = {
       myPlayer: () => myPlayer,
       playerBySmallID: (id: number) => byID[id],
-      unit: (id: number) => ({ id, isActive: () => true }),
+      unit: (id: number) => ({
+        id,
+        isActive: () => true,
+        owner: () => stranger,
+        troops: () => 5000,
+      }),
       ticks: () => 0,
       inSpawnPhase: () => false,
+      isCatchingUp: () => false,
       config: () => ({
+        isReplay: () => false,
         traitorDefenseDebuff: () => 0.5,
         traitorDuration: () => 25, // ticks -> floor(2.5) = 2 seconds
       }),
@@ -149,42 +160,6 @@ describe("EventsDisplay handlers", () => {
     });
   });
 
-  describe("renderButton", () => {
-    const renderButton = (options: Record<string, unknown>) =>
-      (
-        ed as unknown as {
-          renderButton: (o: unknown) => {
-            strings: string[];
-            values: unknown[];
-          };
-        }
-      ).renderButton(options);
-
-    it("renders a button wired to the given click handler", () => {
-      const onClick = vi.fn();
-      const button = renderButton({
-        content: "jump to player",
-        onClick,
-        className: "text-left",
-        disabled: true,
-      });
-
-      expect(button.strings.join("")).toContain("<button");
-      expect(button.values).toContain("jump to player");
-      expect(button.values).toContain("text-left");
-      const handler = button.values.find((v) => typeof v === "function") as
-        | (() => void)
-        | undefined;
-      expect(handler).toBe(onClick);
-    });
-
-    it("renders nothing when hidden", () => {
-      const button = renderButton({ content: "invisible", hidden: true });
-      expect(button.values).toHaveLength(0);
-      expect(button.strings.join("")).toBe("");
-    });
-  });
-
   describe("onAllianceRequestReplyEvent", () => {
     const reply = (requestorID: number, accepted: boolean) => ({
       type: GameUpdateType.AllianceRequestReply,
@@ -203,6 +178,62 @@ describe("EventsDisplay handlers", () => {
     it("ignores replies to other players' requests", () => {
       ed.onAllianceRequestReplyEvent(reply(3, true) as never);
       expect(events()).toHaveLength(0);
+    });
+  });
+
+  describe("my own pending alliance request", () => {
+    let now: number;
+    const request = {
+      type: GameUpdateType.AllianceRequest,
+      requestorID: 1,
+      recipientID: 2,
+      createdAt: 0,
+    };
+
+    beforeEach(() => {
+      now = 0;
+      game.ticks = () => now;
+      game.config = () => ({
+        isReplay: () => false,
+        allianceRequestDuration: () => 50,
+      });
+    });
+
+    it("lasts as long as the game's config gives a request", () => {
+      game.updatesSinceLastTick = () => ({
+        [GameUpdateType.AllianceRequest]: [request],
+      });
+      ed.tick();
+      game.updatesSinceLastTick = () => null;
+      expect(events()).toHaveLength(1);
+      expect(events()[0].type).toBe(MessageType.ALLIANCE_REQUEST);
+      expect(events()[0].focusID).toBe(2);
+
+      now = 51;
+      ed.tick();
+      expect(events()).toHaveLength(1);
+
+      now = 52;
+      ed.tick();
+      expect(events()).toHaveLength(0);
+    });
+
+    it("gives way to an answer that comes on the same tick", () => {
+      game.updatesSinceLastTick = () => ({
+        [GameUpdateType.AllianceRequestReply]: [
+          {
+            type: GameUpdateType.AllianceRequestReply,
+            request,
+            accepted: true,
+          },
+        ],
+        [GameUpdateType.AllianceRequest]: [request],
+      });
+      ed.tick();
+
+      expect(events().map((e) => e.type)).toEqual([
+        MessageType.ALLIANCE_ACCEPTED,
+      ]);
     });
   });
 
@@ -287,11 +318,15 @@ describe("EventsDisplay handlers", () => {
   });
 
   describe("onUnitIncomingEvent", () => {
-    const incoming = (playerID: number) => ({
+    const incoming = (
+      playerID: number,
+      message = "nuke inbound",
+      messageType = MessageType.NUKE_INBOUND,
+    ) => ({
       type: GameUpdateType.UnitIncoming,
       unitID: 7,
-      message: "nuke inbound",
-      messageType: MessageType.NUKE_INBOUND,
+      message,
+      messageType,
       playerID,
     });
 
@@ -305,6 +340,190 @@ describe("EventsDisplay handlers", () => {
     it("ignores warnings addressed to other players", () => {
       ed.onUnitIncomingEvent(incoming(2) as never);
       expect(events()).toHaveLength(0);
+    });
+
+    it("translates incoming-unit keys with the owner's display name and troops", () => {
+      ed.onUnitIncomingEvent(
+        incoming(1, "events_display.atom_bomb_inbound") as never,
+      );
+      ed.onUnitIncomingEvent(
+        incoming(
+          1,
+          "events_display.hydrogen_bomb_inbound",
+          MessageType.HYDROGEN_BOMB_INBOUND,
+        ) as never,
+      );
+      ed.onUnitIncomingEvent(
+        incoming(
+          1,
+          "events_display.mirv_inbound_alarm",
+          MessageType.MIRV_INBOUND,
+        ) as never,
+      );
+      ed.onUnitIncomingEvent(
+        incoming(
+          1,
+          "events_display.naval_invasion_inbound",
+          MessageType.NAVAL_INVASION_INBOUND,
+        ) as never,
+      );
+
+      expect(events().map((event) => event.description)).toEqual([
+        'events_display.atom_bomb_inbound {"name":"Stranger"}',
+        'events_display.hydrogen_bomb_inbound {"name":"Stranger"}',
+        'events_display.mirv_inbound_alarm {"name":"Stranger"}',
+        'events_display.naval_invasion_inbound {"name":"Stranger","troops":"5000"}',
+      ]);
+    });
+  });
+
+  describe("grouped missile warnings", () => {
+    let now: number;
+    let units: Record<number, { active: boolean; owner: unknown }>;
+
+    const unitView = (id: number) => ({
+      id: () => id,
+      isActive: () => units[id].active,
+      owner: () => units[id].owner,
+      troops: () => 5000,
+    });
+
+    const launch = (
+      unitID: number,
+      owner: unknown = stranger,
+      message = "events_display.atom_bomb_inbound",
+      messageType = MessageType.NUKE_INBOUND,
+    ) => {
+      units[unitID] = { active: true, owner };
+      ed.onUnitIncomingEvent({
+        type: GameUpdateType.UnitIncoming,
+        unitID,
+        message,
+        messageType,
+        playerID: 1,
+      } as never);
+    };
+
+    const descriptions = () => events().map((event) => event.description);
+
+    beforeEach(() => {
+      now = 0;
+      units = {};
+      game.ticks = () => now;
+      game.unit = (id: number) => (units[id] ? unitView(id) : undefined);
+    });
+
+    it("shows one line with a count for bombs from the same sender", () => {
+      launch(10);
+      launch(11);
+      launch(12);
+
+      expect(descriptions()).toEqual([
+        'events_display.atom_bomb_inbound_count {"name":"Stranger","count":3}',
+      ]);
+    });
+
+    it("keeps different senders on separate lines", () => {
+      launch(10, stranger);
+      launch(11, friend);
+
+      expect(descriptions()).toEqual([
+        'events_display.atom_bomb_inbound {"name":"Stranger"}',
+        'events_display.atom_bomb_inbound {"name":"Friend"}',
+      ]);
+    });
+
+    it("keeps different bomb types on separate lines", () => {
+      launch(10);
+      launch(
+        11,
+        stranger,
+        "events_display.hydrogen_bomb_inbound",
+        MessageType.HYDROGEN_BOMB_INBOUND,
+      );
+      launch(
+        12,
+        stranger,
+        "events_display.mirv_inbound_alarm",
+        MessageType.MIRV_INBOUND,
+      );
+
+      expect(events().map((event) => event.type)).toEqual([
+        MessageType.NUKE_INBOUND,
+        MessageType.HYDROGEN_BOMB_INBOUND,
+        MessageType.MIRV_INBOUND,
+      ]);
+    });
+
+    it("lowers the count as bombs land or get shot down", () => {
+      launch(10);
+      launch(11);
+      launch(12);
+
+      units[10].active = false;
+      ed.tick();
+      expect(descriptions()).toEqual([
+        'events_display.atom_bomb_inbound_count {"name":"Stranger","count":2}',
+      ]);
+
+      units[11].active = false;
+      ed.tick();
+      expect(descriptions()).toEqual([
+        'events_display.atom_bomb_inbound {"name":"Stranger"}',
+      ]);
+    });
+
+    it("removes the line once every bomb is gone", () => {
+      launch(10);
+      launch(11);
+
+      units[10].active = false;
+      units[11].active = false;
+      ed.tick();
+
+      expect(events()).toHaveLength(0);
+    });
+
+    it("restarts the timer when another bomb joins the line", () => {
+      launch(10);
+      now = 60;
+      launch(11);
+      now = 100;
+      ed.tick();
+
+      expect(descriptions()).toEqual([
+        'events_display.atom_bomb_inbound_count {"name":"Stranger","count":2}',
+      ]);
+
+      now = 140;
+      ed.tick();
+      expect(events()).toHaveLength(0);
+    });
+
+    it("counts the same bomb only once", () => {
+      launch(10);
+      launch(10);
+
+      expect(descriptions()).toEqual([
+        'events_display.atom_bomb_inbound {"name":"Stranger"}',
+      ]);
+    });
+
+    it("still shows one line per naval invasion", () => {
+      launch(
+        10,
+        stranger,
+        "events_display.naval_invasion_inbound",
+        MessageType.NAVAL_INVASION_INBOUND,
+      );
+      launch(
+        11,
+        stranger,
+        "events_display.naval_invasion_inbound",
+        MessageType.NAVAL_INVASION_INBOUND,
+      );
+
+      expect(events()).toHaveLength(2);
     });
   });
 

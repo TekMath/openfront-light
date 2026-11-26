@@ -1,16 +1,15 @@
-import { ConstructionExecution } from "../../../src/core/execution/ConstructionExecution";
-import { MissileSiloExecution } from "../../../src/core/execution/MissileSiloExecution";
-import { NukeExecution } from "../../../src/core/execution/NukeExecution";
 import {
-  Game,
   GameMode,
   MessageType,
-  Player,
   PlayerInfo,
   PlayerType,
   UnitType,
-} from "../../../src/core/game/Game";
-import { OTHER_INDEX_DESTROY } from "../../../src/core/StatsSchemas";
+} from "@openfront/engine-api/game/GameTypes";
+import { OTHER_INDEX_DESTROY } from "@openfront/engine-api/StatsSchemas";
+import { ConstructionExecution } from "@openfront/engine/execution/ConstructionExecution";
+import { MissileSiloExecution } from "@openfront/engine/execution/MissileSiloExecution";
+import { NukeExecution } from "@openfront/engine/execution/NukeExecution";
+import { Game, Player } from "@openfront/engine/game/Game";
 import { setup } from "../../util/Setup";
 import { TestConfig } from "../../util/TestConfig";
 import { executeTicks } from "../../util/utils";
@@ -97,6 +96,44 @@ describe("NukeExecution", () => {
     //near target should be targetable (distance target < 400)
     executeTicks(game, 35);
     expect(nukeExec.getNuke()!.isTargetable()).toBeTruthy();
+  });
+
+  test("incoming atom bomb warning uses a translation key", () => {
+    player.buildUnit(UnitType.MissileSilo, game.ref(1, 1), {});
+    const target = game.ref(50, 50);
+    otherPlayer.conquer(target);
+    const displayIncomingSpy = vi.spyOn(game, "displayIncomingUnit");
+
+    game.addExecution(
+      new NukeExecution(UnitType.AtomBomb, player, game.ref(1, 1), target),
+    );
+    executeTicks(game, 2);
+
+    expect(displayIncomingSpy).toHaveBeenCalledWith(
+      expect.any(Number),
+      "events_display.atom_bomb_inbound",
+      MessageType.NUKE_INBOUND,
+      expect.any(String),
+    );
+  });
+
+  test("incoming hydrogen bomb warning uses a translation key", () => {
+    player.buildUnit(UnitType.MissileSilo, game.ref(1, 1), {});
+    const target = game.ref(50, 50);
+    otherPlayer.conquer(target);
+    const displayIncomingSpy = vi.spyOn(game, "displayIncomingUnit");
+
+    game.addExecution(
+      new NukeExecution(UnitType.HydrogenBomb, player, game.ref(1, 1), target),
+    );
+    executeTicks(game, 2);
+
+    expect(displayIncomingSpy).toHaveBeenCalledWith(
+      expect.any(Number),
+      "events_display.hydrogen_bomb_inbound",
+      MessageType.HYDROGEN_BOMB_INBOUND,
+      expect.any(String),
+    );
   });
 
   test("nuke should break alliances on launch", async () => {
@@ -628,5 +665,58 @@ describe("NukeExecution kill credit", () => {
     expect(afk.units(UnitType.Warship)).toHaveLength(0);
     expect(enemy.units(UnitType.Warship)).toHaveLength(0);
     expect(warshipsDestroyed(g, launcher)).toBe(1n);
+  });
+});
+
+describe("NukeExecution alliance break threshold", () => {
+  // Uses the real nukeAllianceBreakThreshold. Inner and outer radii are equal,
+  // so every tile in the blast weighs 1.
+  async function allianceWithTiles(
+    nukeType: UnitType.AtomBomb | UnitType.HydrogenBomb,
+    tileCount: number,
+  ) {
+    const g = await setup("big_plains", { infiniteGold: true }, [
+      new PlayerInfo("launcher", PlayerType.Human, "c1", "launcher_id"),
+      new PlayerInfo("ally", PlayerType.Human, "c2", "ally_id"),
+    ]);
+    (g.config() as TestConfig).nukeMagnitudes = vi.fn(() => ({
+      inner: 50,
+      outer: 50,
+    }));
+    const launcher = g.player("launcher_id");
+    const ally = g.player("ally_id");
+    launcher.conquer(g.ref(1, 1));
+    launcher.buildUnit(UnitType.MissileSilo, g.ref(1, 1), {});
+    launcher.createAllianceRequest(ally)!.accept();
+
+    // A 20-wide strip around the target, all within the blast radius.
+    for (let i = 0; i < tileCount; i++) {
+      ally.conquer(g.ref(90 + (i % 20), 90 + Math.floor(i / 20)));
+    }
+
+    g.addExecution(
+      new NukeExecution(nukeType, launcher, g.ref(100, 100), null),
+    );
+    g.executeNextTick(); // init
+    g.executeNextTick(); // launch
+    return { launcher, ally };
+  }
+
+  test.each([
+    [UnitType.AtomBomb, 150],
+    [UnitType.HydrogenBomb, 1000],
+  ] as const)("%s keeps the alliance at %i allied tiles", async (type, n) => {
+    const { launcher, ally } = await allianceWithTiles(type, n);
+    expect(launcher.isAlliedWith(ally)).toBe(true);
+    expect(launcher.isTraitor()).toBe(false);
+  });
+
+  test.each([
+    [UnitType.AtomBomb, 151],
+    [UnitType.HydrogenBomb, 1001],
+  ] as const)("%s breaks the alliance at %i allied tiles", async (type, n) => {
+    const { launcher, ally } = await allianceWithTiles(type, n);
+    expect(launcher.isAlliedWith(ally)).toBe(false);
+    expect(launcher.isTraitor()).toBe(true);
   });
 });

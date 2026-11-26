@@ -1,12 +1,4 @@
-import { ClientEnv, NoServerError } from "src/client/ClientEnv";
-import { ZbContext } from "../../zbin";
-import {
-  CloseCode,
-  CloseReason,
-  isCloseReason,
-  isTerminalClose,
-} from "../core/CloseCodes";
-import { EventBus, EventConstructor, GameEvent } from "../core/EventBus";
+import { TileRef } from "@openfront/engine-api/game/GameMap";
 import {
   AllPlayers,
   GameType,
@@ -14,12 +6,26 @@ import {
   PlayerID,
   Tick,
   UnitType,
-} from "../core/game/Game";
-import { TileRef } from "../core/game/GameMap";
+} from "@openfront/engine-api/game/GameTypes";
 import {
   AllPlayersStats,
-  ClientHashMessage,
   ClientID,
+  Intent,
+  Winner,
+} from "@openfront/engine-api/Schemas";
+import {
+  CloseCode,
+  CloseReason,
+  isCloseReason,
+  isTerminalClose,
+} from "@openfront/shared/CloseCodes";
+import {
+  EventBus,
+  EventConstructor,
+  GameEvent,
+} from "@openfront/shared/EventBus";
+import {
+  ClientHashMessage,
   ClientIntentMessage,
   ClientJoinMessage,
   ClientMessage,
@@ -29,26 +35,32 @@ import {
   ClientSendLiveStatsMessage,
   ClientSendWinnerMessage,
   ClientSpectateMessage,
-  GameConfig,
-  Intent,
   LiveStats,
   ReportReason,
   ServerMessage,
-  Winner,
-} from "../core/Schemas";
+} from "@openfront/shared/WireSchemas";
 import {
   createGameWireContext,
   decodeServerMessage,
   encodeClientMessage,
-} from "../core/ZbinWire";
+} from "@openfront/shared/ZbinWire";
+import { ZbContext } from "@openfront/zbin";
+import { ClientEnv, NoServerError } from "src/client/ClientEnv";
 import { getPlayToken } from "./Auth";
 import { LobbyConfig } from "./ClientGameRunner";
-import { clientPlatform } from "./ClientPlatform";
+import { clientDevice, clientPlatform } from "./ClientPlatform";
 import { isDesktopShell } from "./DesktopShell";
 import { showInGameConfirm } from "./InGameModal";
+import {
+  SendKickPlayerIntentEvent,
+  SendSpectateEvent,
+  SendToggleGameStartTimer,
+  SendUpdateGameConfigIntentEvent,
+} from "./LobbyEvents";
 import { LocalServer } from "./LocalServer";
 import { describeSocketClose } from "./SocketClose";
-import { homeHref, translateText } from "./Utils";
+import { TURNSTILE_CANCELLED_CODE, TurnstileError } from "./TurnstileToken";
+import { exitGame, translateText } from "./Utils";
 import { PlayerView } from "./view";
 
 export class PauseGameIntentEvent implements GameEvent {
@@ -85,6 +97,15 @@ export class SendAllianceExtensionIntentEvent implements GameEvent {
   constructor(public readonly recipient: PlayerView) {}
 }
 
+/**
+ * Puts a gate in front of every intent this client sends, or removes it
+ * (null). An intent the gate returns false for is dropped. The onboarding
+ * tutorial uses it to let through only what its current step asks for.
+ */
+export class SetIntentGateEvent implements GameEvent {
+  constructor(public readonly gate: ((intent: Intent) => boolean) | null) {}
+}
+
 export class SendSpawnIntentEvent implements GameEvent {
   constructor(public readonly tile: TileRef) {}
 }
@@ -94,6 +115,19 @@ export class SendAttackIntentEvent implements GameEvent {
     public readonly targetID: PlayerID | null,
     public readonly troops: number,
   ) {}
+}
+
+/**
+ * Troops for a counter-attack: the incoming attack's size, capped at what the
+ * player would send. An attack whose count is not a finite number is ignored
+ * rather than turning the whole intent into NaN.
+ */
+export function counterAttackTroops(
+  incomingTroops: number,
+  available: number,
+): number {
+  if (!Number.isFinite(incomingTroops)) return available;
+  return Math.min(incomingTroops, available);
 }
 
 export class SendBoatAttackIntentEvent implements GameEvent {
@@ -208,23 +242,6 @@ export class MoveWarshipIntentEvent implements GameEvent {
   ) {}
 }
 
-export class SendKickPlayerIntentEvent implements GameEvent {
-  constructor(public readonly target: string) {}
-}
-
-export class SendUpdateGameConfigIntentEvent implements GameEvent {
-  constructor(public readonly config: Partial<GameConfig>) {}
-}
-
-export class SendToggleGameStartTimer implements GameEvent {
-  constructor() {}
-}
-
-// Switch between playing and watching from the lobby screen.
-export class SendSpectateEvent implements GameEvent {
-  constructor(public readonly spectator: boolean) {}
-}
-
 // One-shot marker that this lobby has already sent us to a sibling, so a
 // redirect can never become a bounce.
 const poolRedirectLatch = (gameID: string) => `pool-redirect:${gameID}`;
@@ -264,6 +281,12 @@ export class Transport {
   // scheduleReconnect and connectRemote so nothing reopens the socket.
   private connectionRefused = false;
 
+  private retriedWithTurnstile = false;
+  private isRetryingTurnstile = false;
+  private hasBeenAdmitted = false;
+  private fallbackCreatorToken: string | undefined = undefined;
+  private turnstileRetryAbort: AbortController | null = null;
+
   // True once the server has responded to join/rejoin (via start or lobby_info),
   // proving the session is admitted and ready to accept gameplay intents.
   private isSessionReady = false;
@@ -272,6 +295,8 @@ export class Transport {
   // the roster in the start message. Null until the game starts, which is
   // also the last moment a peer can send a dictionary-encoded field.
   private zbinCtx: ZbContext | null = null;
+
+  private intentGate: ((intent: Intent) => boolean) | null = null;
 
   // The bus outlives the transport (one per page, one transport per join),
   // so every subscription must be undone in leaveGame or a superseded
@@ -300,6 +325,7 @@ export class Transport {
     this.subscribe(SendBreakAllianceIntentEvent, (e) =>
       this.onBreakAllianceRequestUIEvent(e),
     );
+    this.subscribe(SetIntentGateEvent, (e) => (this.intentGate = e.gate));
     this.subscribe(SendSpawnIntentEvent, (e) => this.onSendSpawnIntentEvent(e));
     this.subscribe(SendAttackIntentEvent, (e) => this.onSendAttackIntent(e));
     this.subscribe(SendUpgradeStructureIntentEvent, (e) =>
@@ -499,6 +525,9 @@ export class Transport {
           this.zbinCtx = createGameWireContext(msg.gameStartInfo.players);
         }
         if (msg.type === "lobby_info" || msg.type === "start") {
+          this.hasBeenAdmitted = true;
+          this.fallbackCreatorToken = undefined;
+          delete this.lobbyConfig.creatorToken;
           // Admitted, so the redirect that sent us here is spent: drop the
           // source's latch so it can route this player again later. Any other
           // frame proves nothing — a full sibling sends an error frame first.
@@ -554,15 +583,98 @@ export class Transport {
           // The server ended the session (game over, kick): nothing to say
           // and nothing to retry. Latch, or the silence watchdog would open
           // a fresh socket 5s later only to be refused with "game not found".
+          this.fallbackCreatorToken = undefined;
           this.connectionRefused = true;
           this.stopPing();
+        } else if (this.shouldAttemptTurnstileFallback(event)) {
+          void this.retryWithFreshTurnstileToken(event.reason);
         } else {
+          this.fallbackCreatorToken = undefined;
           this.handleConnectionRefused(event.reason);
         }
         return;
       }
+      this.fallbackCreatorToken = undefined;
       this.scheduleReconnect();
     };
+  }
+
+  private shouldAttemptTurnstileFallback(event: CloseEvent): boolean {
+    return (
+      event.code === CloseCode.Unauthorized &&
+      (event.reason === CloseReason.TurnstilePassRequired ||
+        event.reason === CloseReason.TurnstileFailed) &&
+      !this.hasBeenAdmitted &&
+      !this.connectionRefused &&
+      this.lobbyConfig.turnstileToken === null &&
+      !this.retriedWithTurnstile &&
+      this.lobbyConfig.refreshTurnstileToken !== undefined
+    );
+  }
+
+  // Fallback for pass-mode rejections prior to admission: mint a fresh
+  // Turnstile token once and redial without surfacing a modal unless the
+  // refresh fails or the retried join is also rejected.
+  private async retryWithFreshTurnstileToken(
+    fallbackReason: string,
+  ): Promise<void> {
+    this.retriedWithTurnstile = true;
+    this.isRetryingTurnstile = true;
+    this.stopPing();
+    this.cancelReconnect();
+    this.killExistingSocket();
+
+    const refreshTurnstileToken = this.lobbyConfig.refreshTurnstileToken;
+    if (!refreshTurnstileToken) {
+      this.isRetryingTurnstile = false;
+      this.handleConnectionRefused(fallbackReason);
+      return;
+    }
+
+    const abort = new AbortController();
+    this.turnstileRetryAbort = abort;
+    try {
+      const freshToken = await refreshTurnstileToken(abort.signal);
+      if (this.turnstileRetryAbort === abort) {
+        this.turnstileRetryAbort = null;
+      }
+      this.isRetryingTurnstile = false;
+      if (this.connectionRefused || abort.signal.aborted) {
+        return;
+      }
+      if (!freshToken) {
+        this.fallbackCreatorToken = undefined;
+        this.handleConnectionRefused(fallbackReason);
+        return;
+      }
+      this.lobbyConfig.turnstileToken = freshToken;
+      if (this.fallbackCreatorToken !== undefined) {
+        this.lobbyConfig.creatorToken = this.fallbackCreatorToken;
+        this.fallbackCreatorToken = undefined;
+      }
+      this.reconnectAttempts = 0;
+      if (this.onconnect && this.onmessage) {
+        this.connectRemote(this.onconnect, this.onmessage);
+      } else {
+        this.handleConnectionRefused(fallbackReason);
+      }
+    } catch (error) {
+      if (this.turnstileRetryAbort === abort) {
+        this.turnstileRetryAbort = null;
+      }
+      this.isRetryingTurnstile = false;
+      if (
+        this.connectionRefused ||
+        abort.signal.aborted ||
+        (error instanceof TurnstileError &&
+          error.code === TURNSTILE_CANCELLED_CODE)
+      ) {
+        this.fallbackCreatorToken = undefined;
+        this.connectionRefused = true;
+        return;
+      }
+      this.handleConnectionRefused(fallbackReason);
+    }
   }
 
   // The lobby we asked for assigned us to a sibling. Getting here twice is
@@ -629,7 +741,7 @@ export class Transport {
       cancelText: translateText("common.close"),
     }).then((goHome) => {
       if (goHome) {
-        window.location.href = homeHref();
+        exitGame();
       }
     });
   }
@@ -646,7 +758,11 @@ export class Transport {
   }
 
   private scheduleReconnect() {
-    if (this.connectionRefused || this.reconnectTimeout !== null) {
+    if (
+      this.connectionRefused ||
+      this.isRetryingTurnstile ||
+      this.reconnectTimeout !== null
+    ) {
       return;
     }
     // An attempt is already in flight; let it succeed or fail on its own.
@@ -701,6 +817,14 @@ export class Transport {
   }
 
   async joinGame() {
+    // Only the first join: the token is short-lived, and a later reconnect
+    // must not present one that has since expired. Stash it in
+    // fallbackCreatorToken so an immediate pre-admission Turnstile pass
+    // fallback can still present it once.
+    const creatorToken = this.lobbyConfig.creatorToken;
+    delete this.lobbyConfig.creatorToken;
+    this.fallbackCreatorToken = creatorToken;
+    const token = creatorToken ?? (await getPlayToken());
     this.sendMsg({
       type: "join",
       gameID: this.lobbyConfig.gameID,
@@ -709,10 +833,11 @@ export class Transport {
       clanTag: this.lobbyConfig.playerClanTag ?? null,
       cosmetics: this.lobbyConfig.cosmetics,
       turnstileToken: this.lobbyConfig.turnstileToken,
-      token: await getPlayToken(),
+      token,
       spectator: this.lobbyConfig.spectator,
       gitCommit: ClientEnv.gitCommit(),
       platform: clientPlatform(),
+      device: clientDevice(),
     } satisfies ClientJoinMessage);
   }
 
@@ -738,6 +863,10 @@ export class Transport {
     // A left game is never rejoined through this transport, whatever still
     // asks (the watchdog, a late send).
     this.connectionRefused = true;
+    this.fallbackCreatorToken = undefined;
+    this.turnstileRetryAbort?.abort();
+    this.turnstileRetryAbort = null;
+    this.isRetryingTurnstile = false;
     this.stopPing();
     this.cancelReconnect();
     if (this.socket === null) {
@@ -792,6 +921,7 @@ export class Transport {
   }
 
   private onSendAttackIntent(event: SendAttackIntentEvent) {
+    if (!this.isSendableTroops("attack", event.troops)) return;
     this.sendIntent({
       type: "attack",
       targetID: event.targetID,
@@ -800,6 +930,7 @@ export class Transport {
   }
 
   private onSendBoatAttackIntent(event: SendBoatAttackIntentEvent) {
+    if (!this.isSendableTroops("boat", event.troops)) return;
     this.sendIntent({
       type: "boat",
       troops: event.troops,
@@ -994,7 +1125,20 @@ export class Transport {
     this.sendIntent({ type: "toggle_game_start_timer" });
   }
 
+  // The intent schemas take troops as a finite float >= 0, and the server
+  // kicks a client whose message fails to parse. Drop the one intent instead,
+  // and log it with a stack (console.error reaches telemetry) so the caller
+  // that produced the bad count shows up.
+  private isSendableTroops(type: Intent["type"], troops: number): boolean {
+    if (Number.isFinite(troops) && troops >= 0) return true;
+    console.error(
+      new Error(`Dropped ${type} intent with invalid troops: ${troops}`),
+    );
+    return false;
+  }
+
   private sendIntent(intent: Intent) {
+    if (this.intentGate !== null && !this.intentGate(intent)) return;
     const msg = {
       type: "intent",
       intent: intent,

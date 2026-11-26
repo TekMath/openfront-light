@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientEnv } from "../src/client/ClientEnv";
+// This named import also registers <game-mode-selector> as a side effect.
 import { shouldBlockMultiplayerAction } from "../src/client/GameModeSelector";
 import {
   attemptInFlight,
@@ -21,8 +23,11 @@ vi.mock("../src/client/LobbySocket", () => ({
   },
 }));
 
-// Registers <game-mode-selector> as a side effect.
-import "../src/client/GameModeSelector";
+// The lobby modals load on demand; the stubs below stand in for loaded ones.
+vi.mock("../src/client/LazyModals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/client/LazyModals")>()),
+  whenModalLoaded: (_tag: string, open: () => void) => open(),
+}));
 
 // openfront-light disables the server-list API by default; this suite
 // covers the upstream behaviour, so it turns it back on.
@@ -218,6 +223,7 @@ describe("the multiplayer entry points while the backend is unreachable", () => 
     selector = await mountSelector();
     await announce(false, true);
     clickEveryButton();
+    document.dispatchEvent(new CustomEvent("leave-lobby"));
     expect(joinOpen).not.toHaveBeenCalled();
 
     await announce(true);
@@ -332,6 +338,7 @@ describe("a refused multiplayer click on the web", () => {
   it("does not probe again inside the cooldown, but still says why", async () => {
     await mountGated();
     clickEveryButton();
+    document.dispatchEvent(new CustomEvent("leave-lobby"));
     await vi.waitFor(() => expect(attemptInFlight()).toBe(false));
     const after = fetchMock.mock.calls.length;
     messages.length = 0;
@@ -347,6 +354,7 @@ describe("a refused multiplayer click on the web", () => {
   it("probes again once the cooldown has elapsed", async () => {
     await mountGated();
     clickEveryButton();
+    document.dispatchEvent(new CustomEvent("leave-lobby"));
     await vi.waitFor(() => expect(attemptInFlight()).toBe(false));
     const after = fetchMock.mock.calls.length;
 
@@ -369,6 +377,7 @@ describe("a refused multiplayer click on the web", () => {
     );
 
     clickEveryButton();
+    document.dispatchEvent(new CustomEvent("leave-lobby"));
     await vi.waitFor(() => expect(backendUnreachableConfirmed()).toBe(false));
     await selector.updateComplete;
 

@@ -1,18 +1,20 @@
-import { ConstructionExecution } from "../src/core/execution/ConstructionExecution";
-import { NationAllianceBehavior } from "../src/core/execution/nation/NationAllianceBehavior";
-import { NationEmojiBehavior } from "../src/core/execution/nation/NationEmojiBehavior";
-import { NationWarshipBehavior } from "../src/core/execution/nation/NationWarshipBehavior";
-import { TransportShipExecution } from "../src/core/execution/TransportShipExecution";
-import { AiAttackBehavior } from "../src/core/execution/utils/AiAttackBehavior";
 import {
   Difficulty,
-  Game,
-  Player,
   PlayerInfo,
   PlayerType,
   UnitType,
-} from "../src/core/game/Game";
-import { PseudoRandom } from "../src/core/PseudoRandom";
+} from "@openfront/engine-api/game/GameTypes";
+import { PseudoRandom } from "@openfront/engine-lib/PseudoRandom";
+import { ConstructionExecution } from "@openfront/engine/execution/ConstructionExecution";
+import { NationAllianceBehavior } from "@openfront/engine/execution/nation/NationAllianceBehavior";
+import { NationAttackBehavior } from "@openfront/engine/execution/nation/NationAttackBehavior";
+import { NationEmojiBehavior } from "@openfront/engine/execution/nation/NationEmojiBehavior";
+import { NationWarshipBehavior } from "@openfront/engine/execution/nation/NationWarshipBehavior";
+import { TransportShipExecution } from "@openfront/engine/execution/TransportShipExecution";
+import type { BoatRoute } from "@openfront/engine/execution/utils/AiAttackBehavior";
+import { Game, Player, Unit } from "@openfront/engine/game/Game";
+import { canBuildTransportShip } from "@openfront/engine/game/TransportShipUtils";
+import { SpatialQuery } from "@openfront/engine/pathfinding/spatial/SpatialQuery";
 import { createGame, L, W } from "./core/pathfinding/_fixtures";
 import { setup } from "./util/Setup";
 
@@ -38,7 +40,7 @@ describe("Nation boats and hostile warships", () => {
     const emoji = new NationEmojiBehavior(random, game, nation);
     const alliance = new NationAllianceBehavior(random, game, nation, emoji);
     const warships = new NationWarshipBehavior(random, game, nation, emoji);
-    const behavior = new AiAttackBehavior(
+    const behavior = new NationAttackBehavior(
       random,
       game,
       nation,
@@ -83,15 +85,30 @@ describe("Nation boats and hostile warships", () => {
     },
   );
 
-  it.each([Difficulty.Medium, Difficulty.Hard, Difficulty.Impossible])(
-    "%s: holds the boat when a hostile warship covers the route",
+  it("Medium: holds the boat when a hostile warship covers the route", async () => {
+    const { game, island, navy, behavior } = await setupBoats(
+      Difficulty.Medium,
+    );
+    const water = game.ref(11, 12);
+    navy.buildUnit(UnitType.Warship, water, { patrolTile: water });
+    const spy = spyExecutions(game);
+    expect(behavior.sendAttack(island)).toBe(false);
+    expect(boatsSent(spy)).toHaveLength(0);
+  });
+
+  it.each([Difficulty.Hard, Difficulty.Impossible])(
+    "%s: risks only a 1%% beachhead boat when a hostile warship covers the route",
     async (difficulty) => {
       const { game, island, navy, behavior } = await setupBoats(difficulty);
       const water = game.ref(11, 12);
       navy.buildUnit(UnitType.Warship, water, { patrolTile: water });
       const spy = spyExecutions(game);
+      expect(behavior.sendAttack(island)).toBe(true);
+      expect(boatsSent(spy).map((e) => e["troops"])).toEqual([1_000]);
+      // Only one beachhead at a time goes past a warship
+      game.executeNextTick();
       expect(behavior.sendAttack(island)).toBe(false);
-      expect(boatsSent(spy)).toHaveLength(0);
+      expect(boatsSent(spy)).toHaveLength(1);
     },
   );
 
@@ -117,14 +134,15 @@ describe("Nation boats and hostile warships", () => {
     expect(boatsSent(spy)).toHaveLength(1);
   });
 
+  // Hard & Impossible send a beachhead boat through the blocked lane anyway
   it.each([
-    [Difficulty.Impossible, 2],
-    [Difficulty.Hard, 1],
-    [Difficulty.Medium, 0],
-    [Difficulty.Easy, 0],
+    [Difficulty.Impossible, 2, 1],
+    [Difficulty.Hard, 1, 1],
+    [Difficulty.Medium, 0, 0],
+    [Difficulty.Easy, 0, 0],
   ])(
-    "%s: blocked boat orders %i warships against the blocker at once",
-    async (difficulty, expected) => {
+    "%s: blocked boat orders %i warships against the blocker at once (%i boats)",
+    async (difficulty, expected, boats) => {
       const { game, nation, navy, behavior } = await setupBoats(difficulty);
       nation.buildUnit(UnitType.Port, game.ref(7, 8), {});
       nation.addGold(10_000_000n);
@@ -132,7 +150,7 @@ describe("Nation boats and hostile warships", () => {
       navy.buildUnit(UnitType.Warship, water, { patrolTile: water });
       const spy = spyExecutions(game);
       behavior.maybeAttack();
-      expect(boatsSent(spy)).toHaveLength(0);
+      expect(boatsSent(spy)).toHaveLength(boats);
       expect(warshipsOrdered(spy, nation)).toHaveLength(expected);
     },
   );
@@ -154,7 +172,7 @@ describe("Nation boats and hostile warships", () => {
       }
       const spy = spyExecutions(game);
       behavior.maybeAttack();
-      expect(boatsSent(spy)).toHaveLength(0);
+      expect(boatsSent(spy)).toHaveLength(1);
       expect(warshipsOrdered(spy, nation)).toHaveLength(expected);
     },
   );
@@ -235,7 +253,7 @@ describe("Nation boats and hostile warships", () => {
       nation.buildUnit(UnitType.Warship, near, { patrolTile: near });
       const spy = spyExecutions(game);
       behavior.maybeAttack();
-      expect(boatsSent(spy)).toHaveLength(0);
+      expect(boatsSent(spy)).toHaveLength(1);
       expect(warshipsOrdered(spy, nation)).toHaveLength(expected);
     },
   );
@@ -262,7 +280,7 @@ describe("Nation boats and hostile warships", () => {
       nation.addGold(price(0) + price(1) + extraGold);
       const spy = spyExecutions(game);
       behavior.maybeAttack();
-      expect(boatsSent(spy)).toHaveLength(0);
+      expect(boatsSent(spy)).toHaveLength(1);
       expect(warshipsOrdered(spy, nation)).toHaveLength(expected);
     },
   );
@@ -296,7 +314,7 @@ describe("Nation boat routes on open water", () => {
     enemy.setTroops(10_000);
     const random = new PseudoRandom(42);
     const emoji = new NationEmojiBehavior(random, game, nation);
-    const behavior = new AiAttackBehavior(
+    const behavior = new NationAttackBehavior(
       random,
       game,
       nation,
@@ -309,7 +327,7 @@ describe("Nation boat routes on open water", () => {
     );
     const warshipAt = (x: number, y: number) => {
       const tile = game.ref(x, y);
-      navy.buildUnit(UnitType.Warship, tile, { patrolTile: tile });
+      return navy.buildUnit(UnitType.Warship, tile, { patrolTile: tile });
     };
     const landings = () =>
       vi
@@ -318,7 +336,7 @@ describe("Nation boat routes on open water", () => {
         .filter((e) => e instanceof TransportShipExecution)
         .map((e) => e["ref"] as number);
     vi.spyOn(game, "addExecution");
-    return { game, enemy, behavior, warshipAt, landings };
+    return { game, nation, enemy, behavior, warshipAt, landings };
   }
 
   // A 3-tile hop off a peninsula across a 4-tile strait; the enemy coast is only 30 tiles long
@@ -342,21 +360,19 @@ describe("Nation boat routes on open water", () => {
     },
   );
 
-  it.each([Difficulty.Medium, Difficulty.Hard, Difficulty.Impossible])(
-    "%s: holds the short hop when the warship is right next to it",
-    async (difficulty) => {
-      const { enemy, behavior, warshipAt, landings } = setupSea(
-        difficulty,
-        200,
-        30,
-        strait,
-        14,
-      );
-      warshipAt(16, 12);
-      expect(behavior.sendAttack(enemy)).toBe(false);
-      expect(landings()).toHaveLength(0);
-    },
-  );
+  // Hard & Impossible would send a beachhead boat instead
+  it("Medium: holds the short hop when the warship is right next to it", async () => {
+    const { enemy, behavior, warshipAt, landings } = setupSea(
+      Difficulty.Medium,
+      200,
+      30,
+      strait,
+      14,
+    );
+    warshipAt(16, 12);
+    expect(behavior.sendAttack(enemy)).toBe(false);
+    expect(landings()).toHaveLength(0);
+  });
 
   // Open sea with a peninsula reaching towards the enemy coast at x <= 10
   const sea = (x: number, y: number) =>
@@ -388,5 +404,63 @@ describe("Nation boat routes on open water", () => {
     expect(behavior.sendAttack(enemy)).toBe(true);
     const [landing] = landings();
     expect(game.x(landing)).toBeLessThanOrEqual(20);
+  });
+
+  it("Medium doesn't pathfind a launch when a warship blocks every one", async () => {
+    const { enemy, behavior, warshipAt } = setupSea(
+      Difficulty.Medium,
+      200,
+      30,
+      strait,
+      14,
+    );
+    warshipAt(16, 12);
+    const launches = vi.spyOn(SpatialQuery.prototype, "closestShoreByWater");
+    try {
+      expect(behavior.sendAttack(enemy)).toBe(false);
+      expect(launches).not.toHaveBeenCalled();
+    } finally {
+      launches.mockRestore();
+    }
+  });
+
+  // Skipping the launch must never turn a clear route into a blocked one
+  it("Medium only skips launches that would all be blocked", async () => {
+    const { game, nation, behavior, warshipAt } = setupSea(
+      Difficulty.Medium,
+      400,
+      60,
+      sea,
+      52,
+    );
+    const ai = behavior as unknown as {
+      everyLaunchBlocked(landing: number, warships: Unit[]): boolean;
+      hostileWarships(): Unit[];
+      sail(launch: number, landing: number, warships: Unit[]): BoatRoute;
+    };
+    const landings = [5, 100, 200, 300].map((x) => game.ref(x, 52));
+    let skipped = 0;
+    let pathfound = 0;
+    for (let x = 0; x < 400; x += 25) {
+      for (let y = 8; y < 52; y += 6) {
+        if (game.isLand(game.ref(x, y))) continue;
+        const warship = warshipAt(x, y);
+        const warships = ai.hostileWarships();
+        for (const landing of landings) {
+          if (!ai.everyLaunchBlocked(landing, warships)) {
+            pathfound++;
+            continue;
+          }
+          skipped++;
+          const launch = canBuildTransportShip(game, nation, landing);
+          if (launch === false) continue;
+          expect(ai.sail(launch, landing, warships).blocker).not.toBeNull();
+        }
+        warship.delete(false);
+      }
+    }
+    // Both kinds of placement were tried
+    expect(skipped).toBeGreaterThan(20);
+    expect(pathfound).toBeGreaterThan(20);
   });
 });

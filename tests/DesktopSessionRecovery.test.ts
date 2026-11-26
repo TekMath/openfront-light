@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDesktopSessionState } from "../src/client/Auth";
 import { subscribeDesktopSessionRecovery } from "../src/client/DesktopSessionRecovery";
@@ -23,7 +24,7 @@ function reachability(reachable: boolean) {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  window.openfrontDesktop = {};
+  window.openfrontDesktop = { steam: {} };
   vi.mocked(getDesktopSessionState).mockReturnValue({
     status: "signed-out",
     reason: "network",

@@ -1,9 +1,13 @@
-import { ANON_WORDS, anonWordName } from "../core/AnonNames";
-import { isTemporaryUsername, type UserMeResponse } from "../core/ApiSchemas";
 import {
   RENDERABLE_NAME_CHAR_RE,
   RENDERABLE_NAME_HAS_ALNUM_RE,
-} from "../core/Schemas";
+} from "@openfront/engine-api/Schemas";
+import { resolveTribeNameData } from "@openfront/engine-lib/execution/utils/TribeNames";
+import { ANON_WORDS, anonWordName } from "@openfront/shared/AnonNames";
+import {
+  isTemporaryUsername,
+  type UserMeResponse,
+} from "@openfront/shared/ApiSchemas";
 import {
   ACCOUNT_NAME_CHAR_RE,
   MAX_ACCOUNT_USERNAME_LENGTH,
@@ -11,7 +15,7 @@ import {
   MIN_ACCOUNT_USERNAME_LENGTH,
   MIN_USERNAME_LENGTH,
   validateAccountUsername,
-} from "../core/validations/username";
+} from "./validations/username";
 
 // What name a player plays under, resolved in one place.
 //
@@ -469,4 +473,38 @@ export function genAnonUsername(): string {
   // handle should say it is a placeholder, whereas the in-game anonymisation
   // setting makes everyone anonymous and gains nothing from repeating the word.
   return `Anon${anonWordName(rand % bound)}`;
+}
+
+export type RandomNameStyle = "tribe" | "anon";
+
+// Keep complete tribe names that fit the player-name limit rather than
+// truncating a prefix/suffix combination in the middle of a word.
+const { prefixes, suffixes } = resolveTribeNameData();
+const tribeNames = prefixes.flatMap((prefix) =>
+  suffixes
+    // The censor removes spaces, so "an Alliance" matches its "anal" pattern.
+    .filter((suffix) => !(prefix.endsWith("an") && suffix === "Alliance"))
+    .map((suffix) => `${prefix} ${suffix}`)
+    .filter((name) => name.length <= MAX_USERNAME_LENGTH),
+);
+
+export function generateRandomPlayerName(
+  style: RandomNameStyle,
+  currentName = "",
+): string {
+  if (style === "anon") {
+    let name: string;
+    do {
+      name = genAnonUsername();
+    } while (name === currentName);
+    return name;
+  }
+
+  const names = tribeNames.filter((name) => name !== currentName);
+  const limit = Math.floor(0x1_0000_0000 / names.length) * names.length;
+  const buffer = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(buffer);
+  } while (buffer[0] >= limit);
+  return names[buffer[0] % names.length];
 }

@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
 import {
+  allowPageAssetUrls,
   buildAssetUrl,
-  rewriteAssetsForCdn,
-  workerCdnBase,
-} from "../src/core/AssetUrls";
+} from "@openfront/shared/AssetPaths";
+import { rewriteAssetsForCdn } from "@openfront/shared/AssetUrls";
+import { afterEach, describe, expect, test } from "vitest";
 
 describe("AssetUrls", () => {
   test("returns hashed URLs for direct asset matches", () => {
@@ -95,6 +95,58 @@ describe("AssetUrls", () => {
 
   // Manifest miss → keep same-origin; the CDN only serves what was explicitly
   // hashed and uploaded, so unknown paths must not be prefixed.
+  // The cosmetic preview package opts in (configurePreviewAssets()); the game
+  // never does, so a catalogue url can't point players at an inline image.
+  describe("blob: and data: URLs", () => {
+    // URL.createObjectURL gives blob:<origin>/<uuid>: no "//" after the
+    // scheme, so the absolute-URL check alone would mangle it into a path.
+    const blob =
+      "blob:https://dashboard.example/5f0c9a1e-3b7d-4c2e-9a10-2f6e8b1d4c3a";
+    const data = "data:image/png;base64,iVBORw0KGgo=";
+    afterEach(() => allowPageAssetUrls(false));
+
+    test("in the game, the default, they are paths, as before", () => {
+      expect(buildAssetUrl(blob)).toBe(
+        "/blob%3Ahttps%3A/dashboard.example/5f0c9a1e-3b7d-4c2e-9a10-2f6e8b1d4c3a",
+      );
+      expect(buildAssetUrl(blob, {}, "https://cdn.example.com")).not.toBe(blob);
+      expect(buildAssetUrl(data)).toBe(
+        "/data%3Aimage/png%3Bbase64%2CiVBORw0KGgo%3D",
+      );
+      expect(buildAssetUrl(data, {}, "https://cdn.example.com")).not.toBe(data);
+    });
+
+    test("once the preview package opts in, they pass unchanged and ignore baseUrl", () => {
+      allowPageAssetUrls();
+      expect(buildAssetUrl(blob)).toBe(blob);
+      expect(buildAssetUrl(blob, {}, "https://cdn.example.com")).toBe(blob);
+      expect(buildAssetUrl("blob:null/1234")).toBe("blob:null/1234");
+      expect(buildAssetUrl(data)).toBe(data);
+      expect(buildAssetUrl(data, {}, "https://cdn.example.com")).toBe(data);
+    });
+
+    test("configurePreviewAssets() is what opts in", async () => {
+      const { configurePreviewAssets } =
+        await import("../src/client/cosmetic-preview/assets");
+      expect(buildAssetUrl(blob)).not.toBe(blob);
+      try {
+        configurePreviewAssets("https://dash.example/preview");
+        expect(buildAssetUrl(blob)).toBe(blob);
+      } finally {
+        delete globalThis.__CDN_BASE__;
+        delete globalThis.__ASSET_MANIFEST__;
+      }
+    });
+
+    test("a path that merely contains blob: or data: is a path either way", () => {
+      for (const allowed of [false, true]) {
+        allowPageAssetUrls(allowed);
+        expect(buildAssetUrl("images/blob:x.png")).toBe("/images/blob%3Ax.png");
+        expect(buildAssetUrl("data/data:y.png")).toBe("/data/data%3Ay.png");
+      }
+    });
+  });
+
   test("does not prefix baseUrl on manifest misses", () => {
     expect(
       buildAssetUrl("images/unknown.svg", {}, "https://cdn.example.com"),
@@ -164,24 +216,5 @@ describe("rewriteAssetsForCdn", () => {
   test("does not match data-src or other custom attributes", () => {
     const html = `<img data-src="/assets/foo.png">`;
     expect(rewriteAssetsForCdn(html)).toBe(html);
-  });
-
-  // openfront-light: the Blob game worker cannot resolve relative URLs.
-  test("gives the worker the page origin when CDN_BASE is empty", () => {
-    const base = workerCdnBase("", "https://play.example.com");
-    expect(base).toBe("https://play.example.com");
-    expect(
-      buildAssetUrl(
-        "maps/world/manifest.json",
-        { "maps/world/manifest.json": "/_assets/maps/world/manifest.h.json" },
-        base,
-      ),
-    ).toBe("https://play.example.com/_assets/maps/world/manifest.h.json");
-  });
-
-  test("keeps a configured CDN base for the worker", () => {
-    expect(
-      workerCdnBase("https://cdn.example.com", "https://play.example.com"),
-    ).toBe("https://cdn.example.com");
   });
 });

@@ -91,6 +91,45 @@ describe("purchaseCosmeticPack", () => {
     });
   });
 
+  it("sends the placement when given and omits the key otherwise", async () => {
+    const ok = {
+      packName: "starter",
+      currencyType: "hard",
+      amount: "250",
+      flareNames: [],
+    };
+    respond(200, ok);
+    await purchaseCosmeticPack("starter", { kind: "flash" });
+    expect(
+      JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)),
+    ).toEqual({ packName: "starter", placement: { kind: "flash" } });
+
+    respond(200, ok);
+    await purchaseCosmeticPack("starter");
+    const body = JSON.parse(
+      String((fetchMock.mock.calls[1][1] as RequestInit).body),
+    );
+    expect("placement" in body).toBe(false);
+  });
+
+  it("purchaseWithCurrency sends the placement when given and omits the key otherwise", async () => {
+    respond(200, { cosmeticType: "pattern" });
+    await purchaseWithCurrency("pattern", "stripes", "hard", undefined, {
+      kind: "post_game",
+    });
+    const first = JSON.parse(
+      String((fetchMock.mock.calls[0][1] as RequestInit).body),
+    );
+    expect(first.placement).toEqual({ kind: "post_game" });
+
+    respond(200, { cosmeticType: "pattern" });
+    await purchaseWithCurrency("pattern", "stripes", "hard");
+    const second = JSON.parse(
+      String((fetchMock.mock.calls[1][1] as RequestInit).body),
+    );
+    expect("placement" in second).toBe(false);
+  });
+
   it("maps the player-facing 400 reasons", async () => {
     respond(400, { error: "Bad request", reason: "Insufficient balance" });
     expect(await purchaseCosmeticPack("starter")).toEqual({
@@ -224,7 +263,18 @@ describe("purchaseWithCurrency", () => {
       cosmeticName: "pirate",
       currencyType: "hard",
     });
-    expect(result).toEqual({ ok: true });
+    // What was charged, so the caller can tell a changed price from the
+    // one it showed.
+    expect(result).toEqual({ ok: true, amount: 100 });
+  });
+
+  it("still reports success when the body carries no amount", async () => {
+    respond(200, {});
+
+    expect(await purchaseWithCurrency("flag", "pirate", "hard")).toEqual({
+      ok: true,
+      amount: undefined,
+    });
   });
 
   it("reports the debt and its amount", async () => {
@@ -275,15 +325,12 @@ describe("purchaseWithCurrency", () => {
       ok: false,
       code: "already_owned",
     });
-    // The body is never read: a regression that calls response.json() and
-    // discards the result would leave bodyUsed true and fail here, which no
-    // assertion on the returned value could catch.
-    expect(response.bodyUsed).toBe(false);
-    // Not an error condition: on main this fell into the !response.ok branch
-    // and logged the status. Nothing is read from the body, so nothing from
-    // it can reach a log line.
+    // The body is read only to tell this from a price_changed refusal, and
+    // none of it reaches a log line. Not an error condition: on main this
+    // fell into the !response.ok branch and logged the status.
     expect(console.error).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
+    expectNoConsoleCallContains("CANARY-a1b2");
     // One request: guards against a retry loop creeping back in.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

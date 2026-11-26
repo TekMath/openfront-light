@@ -1,5 +1,5 @@
-import { GameMapType, UnitType } from "../../core/game/Game";
-import { GameConfig } from "../../core/Schemas";
+import { GameMapType, UnitType } from "@openfront/engine-api/game/GameTypes";
+import { GameConfig } from "@openfront/engine-api/Schemas";
 import { enabledMapTypes } from "./EnabledMaps";
 
 /**
@@ -125,10 +125,9 @@ export function getNationsForCompactMap(
 }
 
 export function getRandomMapType(): GameMapType {
-  // openfront-light: pick among the maps embedded in this build only.
+  // openfront-light: pick among the listed maps embedded in this build only.
   const maps = enabledMapTypes();
-  const randIdx = Math.floor(Math.random() * maps.length);
-  return maps[randIdx] as GameMapType;
+  return maps[Math.floor(Math.random() * maps.length)];
 }
 
 export function getUpdatedDisabledUnits(

@@ -4,7 +4,9 @@ import {
   apiMockFactory,
   authMockFactory,
   clanApiMockFactory,
+  cosmeticsMockFactory,
   crazyGamesSdkMockFactory,
+  flushAsync,
   getElState,
   makeClan,
   setState,
@@ -17,6 +19,7 @@ import {
 vi.mock("@lit-labs/virtualizer/virtualize.js", () => virtualizerMockFactory());
 vi.mock("../../../src/client/Api", () => apiMockFactory());
 vi.mock("../../../src/client/ClanApi", () => clanApiMockFactory());
+vi.mock("../../../src/client/Cosmetics", () => cosmeticsMockFactory());
 vi.mock("../../../src/client/Utils", () => utilsMockFactory());
 vi.mock("../../../src/client/Auth", () => authMockFactory());
 vi.mock("../../../src/client/CrazyGamesSDK", () => crazyGamesSdkMockFactory());
@@ -165,6 +168,172 @@ describe("ClanModal — rendering", () => {
       );
       expect(officerSpan).toBeTruthy();
       expect(officerSpan!.className).toContain("blue");
+    });
+  });
+
+  describe("browse sort dropdown", () => {
+    it("loads with the random sort, then refetches page 1 with the picked sort and a fresh bucket", async () => {
+      const { fetchClans } = await import("../../../src/client/ClanApi");
+      const fetchMock = fetchClans as ReturnType<typeof vi.fn>;
+      const page = {
+        results: [makeClan({ tag: "OTH", name: "Other Clan" })],
+        total: 1,
+        page: 1,
+        limit: 20,
+        bucket: 42,
+      };
+      fetchMock.mockResolvedValueOnce(page).mockResolvedValueOnce(page);
+      setState(modal, "activeTab" as keyof ClanModal, "browse" as never);
+      await waitForSubComponent(modal, "clan-browse-view");
+
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        undefined,
+        1,
+        undefined,
+        "random",
+        undefined,
+        "all",
+      );
+
+      const select = modal.querySelector(
+        "clan-browse-view [data-browse-sort]",
+      ) as HTMLSelectElement;
+      expect(
+        select.parentElement!.querySelector("[data-chevron] svg"),
+      ).toBeTruthy();
+      const values = Array.from(select.options).map((o) => o.value);
+      expect(values).toEqual([
+        "random",
+        "memberCount",
+        "winScore",
+        "winScoreLow",
+        "createdAt",
+        "softBalance",
+        "name",
+      ]);
+
+      select.value = "winScore";
+      select.dispatchEvent(new Event("change"));
+      await vi.waitFor(() =>
+        expect(fetchMock).toHaveBeenLastCalledWith(
+          undefined,
+          1,
+          undefined,
+          "winScore",
+          undefined,
+          "all",
+        ),
+      );
+    });
+
+    it("filters to open or invite-only clans, back on page 1 with a fresh bucket", async () => {
+      const { fetchClans } = await import("../../../src/client/ClanApi");
+      const fetchMock = fetchClans as ReturnType<typeof vi.fn>;
+      const page = {
+        results: [makeClan({ tag: "OTH", name: "Other Clan" })],
+        total: 1,
+        page: 1,
+        limit: 20,
+        bucket: 42,
+      };
+      fetchMock
+        .mockResolvedValueOnce(page)
+        .mockResolvedValueOnce(page)
+        .mockResolvedValueOnce(page);
+      setState(modal, "activeTab" as keyof ClanModal, "browse" as never);
+      await waitForSubComponent(modal, "clan-browse-view");
+
+      const filter = modal.querySelector(
+        "clan-browse-view [data-browse-filter]",
+      ) as HTMLSelectElement;
+      expect(filter.getAttribute("aria-label")).toBe(
+        "clan_modal.filter_browse_label",
+      );
+      expect(
+        filter.parentElement!.querySelector("[data-chevron] svg"),
+      ).toBeTruthy();
+      expect(Array.from(filter.options).map((o) => o.value)).toEqual([
+        "all",
+        "open",
+        "inviteOnly",
+      ]);
+      expect(filter.value).toBe("all");
+
+      for (const value of ["inviteOnly", "open"] as const) {
+        filter.value = value;
+        filter.dispatchEvent(new Event("change"));
+        await vi.waitFor(() =>
+          expect(fetchMock).toHaveBeenLastCalledWith(
+            undefined,
+            1,
+            undefined,
+            "random",
+            undefined,
+            value,
+          ),
+        );
+      }
+    });
+
+    it("pages with the bucket of the last response", async () => {
+      const { fetchClans } = await import("../../../src/client/ClanApi");
+      const fetchMock = fetchClans as ReturnType<typeof vi.fn>;
+      const page = {
+        results: [makeClan({ tag: "OTH", name: "Other Clan" })],
+        total: 40,
+        page: 1,
+        limit: 20,
+        bucket: 42,
+      };
+      fetchMock.mockResolvedValueOnce(page).mockResolvedValueOnce(page);
+      setState(modal, "activeTab" as keyof ClanModal, "browse" as never);
+      await waitForSubComponent(modal, "clan-browse-view");
+      await vi.waitFor(() => expect(modal.textContent).toContain("1 / 2"));
+
+      const next = Array.from(
+        modal.querySelectorAll<HTMLButtonElement>("clan-browse-view button"),
+      ).find((b) => b.textContent?.trim() === ">")!;
+      next.click();
+      await vi.waitFor(() =>
+        expect(fetchMock).toHaveBeenLastCalledWith(
+          undefined,
+          2,
+          undefined,
+          "random",
+          42,
+          "all",
+        ),
+      );
+    });
+
+    it("shows A–Z, not Random, while searching", async () => {
+      const { fetchClans } = await import("../../../src/client/ClanApi");
+      const fetchMock = fetchClans as ReturnType<typeof vi.fn>;
+      const page = { results: [], total: 0, page: 1, limit: 20 };
+      fetchMock.mockResolvedValueOnce(page);
+      setState(modal, "activeTab" as keyof ClanModal, "browse" as never);
+      const view = await waitForSubComponent(modal, "clan-browse-view");
+
+      const input = modal.querySelector(
+        "clan-browse-view input",
+      ) as HTMLInputElement;
+      input.value = "wolf";
+      input.dispatchEvent(new Event("input"));
+      await (view as unknown as { updateComplete: Promise<boolean> })
+        .updateComplete;
+
+      const select = modal.querySelector(
+        "clan-browse-view [data-browse-sort]",
+      ) as HTMLSelectElement;
+      expect(Array.from(select.options).map((o) => o.value)).toEqual([
+        "memberCount",
+        "winScore",
+        "winScoreLow",
+        "createdAt",
+        "softBalance",
+        "name",
+      ]);
+      expect(select.value).toBe("name");
     });
   });
 
@@ -387,17 +556,285 @@ describe("ClanModal — rendering", () => {
     it("uses the compact card variant, not the header size", async () => {
       const card = await showMyClan(makeClan({ hardBalance: "25" }));
       const cardSize = (
-        card?.querySelector("plutonium-icon") as HTMLElement & { size: number }
+        card!.querySelector("plutonium-icon") as HTMLElement & { size: number }
       ).size;
 
       const header = await openDetail(makeClan({ hardBalance: "25" }));
       const headerSize = (
-        header?.querySelector("plutonium-icon") as HTMLElement & {
+        header!.querySelector("plutonium-icon") as HTMLElement & {
           size: number;
         }
       ).size;
 
       expect(cardSize).toBeLessThan(headerSize);
+    });
+  });
+
+  // ── 3c. Clan affiliate shop button ──────────────────────────────────────
+
+  describe("clan affiliate shop button", () => {
+    afterEach(() => {
+      window.location.hash = "";
+    });
+
+    it("hides the Clan Shop button when no catalog item matches the clan tag", async () => {
+      const { fetchClanDetail } = await import("../../../src/client/ClanApi");
+      const { fetchCosmetics } = await import("../../../src/client/Cosmetics");
+      (fetchClanDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeClan({ tag: "TST" }),
+      );
+      (fetchCosmetics as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        patterns: {},
+        flags: {},
+      });
+
+      setState(modal, "selectedClanTag" as keyof ClanModal, "TST" as never);
+      setState(modal, "view" as keyof ClanModal, "detail" as never);
+      await waitForSubComponent(modal, "clan-detail-view");
+
+      expect(modal.querySelector("[data-action='clan-shop']")).toBeNull();
+    });
+
+    it("hides the Clan Shop button when the only affiliate item uses another clan tag", async () => {
+      const { fetchClanDetail } = await import("../../../src/client/ClanApi");
+      const { fetchCosmetics } = await import("../../../src/client/Cosmetics");
+      (fetchClanDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeClan({ tag: "TST" }),
+      );
+      (fetchCosmetics as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        patterns: {
+          other_camo: {
+            name: "other_camo",
+            pattern: "AA==",
+            priceSoft: 500,
+            product: null,
+            rarity: "common",
+            colorPalettes: [{ name: "default", isArchived: false }],
+            affiliateCode: "OTH",
+          },
+        },
+        flags: {},
+      });
+
+      setState(modal, "selectedClanTag" as keyof ClanModal, "TST" as never);
+      setState(modal, "view" as keyof ClanModal, "detail" as never);
+      await waitForSubComponent(modal, "clan-detail-view");
+
+      expect(modal.querySelector("[data-action='clan-shop']")).toBeNull();
+    });
+
+    it("hides the Clan Shop button when matching affiliate items are off-market (no price)", async () => {
+      const { fetchClanDetail } = await import("../../../src/client/ClanApi");
+      const { fetchCosmetics } = await import("../../../src/client/Cosmetics");
+      (fetchClanDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeClan({ tag: "TST" }),
+      );
+      (fetchCosmetics as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        patterns: {
+          clan_camo: {
+            name: "clan_camo",
+            pattern: "AA==",
+            product: null,
+            rarity: "common",
+            colorPalettes: [{ name: "default", isArchived: false }],
+            affiliateCode: "tst",
+          },
+        },
+        flags: {},
+      });
+
+      setState(modal, "selectedClanTag" as keyof ClanModal, "TST" as never);
+      setState(modal, "view" as keyof ClanModal, "detail" as never);
+      await waitForSubComponent(modal, "clan-detail-view");
+
+      expect(modal.querySelector("[data-action='clan-shop']")).toBeNull();
+    });
+
+    it("hides the Clan Shop button when all matching affiliate items are already owned by the player", async () => {
+      const { fetchClanDetail } = await import("../../../src/client/ClanApi");
+      const { fetchCosmetics } = await import("../../../src/client/Cosmetics");
+      const { getUserMe } = await import("../../../src/client/Api");
+      (fetchClanDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeClan({ tag: "TST" }),
+      );
+      (getUserMe as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        player: {
+          publicId: "test-player",
+          flares: ["flag:clan_flag"],
+          clans: [],
+        },
+      });
+      (fetchCosmetics as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        patterns: {},
+        flags: {
+          clan_flag: {
+            name: "clan_flag",
+            url: "https://example.com/flag.svg",
+            product: null,
+            priceSoft: 500,
+            rarity: "common",
+            affiliateCode: "tst",
+          },
+        },
+      });
+
+      setState(modal, "selectedClanTag" as keyof ClanModal, "TST" as never);
+      setState(modal, "view" as keyof ClanModal, "detail" as never);
+      await waitForSubComponent(modal, "clan-detail-view");
+
+      expect(modal.querySelector("[data-action='clan-shop']")).toBeNull();
+    });
+
+    it("renders the Clan Shop button when a cosmetic matches the clan tag case-insensitively and opens the affiliate store on click", async () => {
+      const { fetchClanDetail } = await import("../../../src/client/ClanApi");
+      const { fetchCosmetics, refreshStaleCosmetics } =
+        await import("../../../src/client/Cosmetics");
+      (fetchClanDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeClan({ tag: "TST" }),
+      );
+      const positiveCatalog = {
+        patterns: {
+          clan_camo: {
+            name: "clan_camo",
+            pattern: "AA==",
+            priceSoft: 500,
+            product: null,
+            rarity: "common",
+            colorPalettes: [{ name: "default", isArchived: false }],
+            affiliateCode: "tst",
+          },
+        },
+        flags: {},
+      };
+      (fetchCosmetics as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        positiveCatalog,
+      );
+
+      const { resolveCosmetics } = await vi.importActual<
+        typeof import("../../../src/client/Cosmetics")
+      >("../../../src/client/Cosmetics");
+      const resolved = resolveCosmetics(positiveCatalog as any, false, "tst");
+      expect(
+        resolved.some(
+          (r) =>
+            r.relationship === "purchasable" &&
+            r.cosmetic !== null &&
+            "affiliateCode" in r.cosmetic &&
+            r.cosmetic.name === "clan_camo" &&
+            r.cosmetic.affiliateCode === "tst",
+        ),
+      ).toBe(true);
+
+      modal.open({ clan: "TST" });
+      await waitForSubComponent(modal, "clan-detail-view");
+      expect(refreshStaleCosmetics).toHaveBeenCalled();
+
+      const shopBtn = modal.querySelector<HTMLButtonElement>(
+        "[data-action='clan-shop']",
+      );
+      expect(shopBtn).toBeTruthy();
+      expect(shopBtn?.textContent).toContain("clan_modal.clan_shop");
+
+      const { modalRouter } = await import("../../../src/client/ModalRouter");
+      const { StoreModal } = await import("../../../src/client/Store");
+      modalRouter.register("store", {
+        tag: "store-modal",
+        pageId: "page-item-store",
+      });
+      const storeModal = document.createElement("store-modal") as InstanceType<
+        typeof StoreModal
+      >;
+      const openSpy = vi.spyOn(storeModal, "open").mockImplementation(() => {});
+      document.body.appendChild(storeModal);
+
+      const onHashChange = () => {
+        if (modalRouter.isHashRouted()) {
+          modalRouter.routeFromHash();
+        }
+      };
+      window.addEventListener("hashchange", onHashChange);
+
+      try {
+        shopBtn!.click();
+        expect(modal.isOpen()).toBe(false);
+        expect(window.location.hash).toBe("#modal=store&affiliateCode=tst");
+
+        await vi.waitFor(() => {
+          expect(openSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ affiliateCode: "tst" }),
+          );
+        });
+      } finally {
+        window.removeEventListener("hashchange", onHashChange);
+        storeModal.remove();
+      }
+    });
+
+    it("discards an older out-of-order lookup when a newer lookup finishes first", async () => {
+      const { fetchClanDetail } = await import("../../../src/client/ClanApi");
+      const { fetchCosmetics } = await import("../../../src/client/Cosmetics");
+      const { getUserMe } = await import("../../../src/client/Api");
+
+      (fetchClanDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeClan({ tag: "TST" }),
+      );
+
+      const positiveCatalog = {
+        patterns: {},
+        flags: {
+          clan_flag: {
+            name: "clan_flag",
+            url: "https://example.com/flag.svg",
+            product: null,
+            priceSoft: 500,
+            rarity: "common",
+            affiliateCode: "tst",
+          },
+        },
+      };
+      (fetchCosmetics as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(positiveCatalog)
+        .mockResolvedValueOnce(positiveCatalog);
+
+      let resolveOldUserMe!: (val: unknown) => void;
+      const oldUserMePromise = new Promise((resolve) => {
+        resolveOldUserMe = resolve;
+      });
+
+      // 1st lookup in loadAffiliateCode hangs on oldUserMePromise
+      // 2nd lookup in loadAffiliateCode resolves immediately with owned flare
+      (getUserMe as ReturnType<typeof vi.fn>)
+        .mockImplementationOnce(() => oldUserMePromise)
+        .mockResolvedValueOnce({
+          player: {
+            publicId: "test-player",
+            flares: ["flag:clan_flag"],
+          },
+        });
+
+      setState(modal, "selectedClanTag" as keyof ClanModal, "TST" as never);
+      setState(modal, "view" as keyof ClanModal, "detail" as never);
+      const detailView = await waitForSubComponent(modal, "clan-detail-view");
+
+      // Trigger newer lookup via userMeResponse
+      document.dispatchEvent(new Event("userMeResponse"));
+      await flushAsync(modal, detailView);
+
+      // Newer lookup finished first: item is owned, so button is hidden
+      expect(modal.querySelector("[data-action='clan-shop']")).toBeNull();
+
+      // Now resolve the older lookup as unowned (which would have shown button)
+      resolveOldUserMe({
+        player: {
+          publicId: "test-player",
+          flares: [],
+        },
+      });
+      await oldUserMePromise;
+      await flushAsync(modal, detailView);
+
+      // Stale lookup was discarded, button remains hidden
+      expect(modal.querySelector("[data-action='clan-shop']")).toBeNull();
     });
   });
 

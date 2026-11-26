@@ -1,5 +1,5 @@
-import { EventBus, GameEvent } from "../core/EventBus";
-import { Cell } from "../core/game/Game";
+import { Cell } from "@openfront/engine-api/game/GameTypes";
+import { EventBus, GameEvent } from "@openfront/shared/EventBus";
 import {
   CenterCameraEvent,
   DragEvent,
@@ -58,6 +58,18 @@ export class TransformHandler {
 
   public updateCanvasBoundingRect() {
     this._boundingRect = this.canvas.getBoundingClientRect();
+  }
+
+  /**
+   * Re-measures the canvas whenever its size changes. The window's resize
+   * event isn't enough: on an iPhone rotation it can fire before layout, which
+   * left the old orientation's size and stopped panning short of the map's
+   * edge in landscape.
+   */
+  public observeCanvasSize(): ResizeObserver {
+    const observer = new ResizeObserver(() => this.updateCanvasBoundingRect());
+    observer.observe(this.canvas);
+    return observer;
   }
 
   boundingRect(): DOMRect {

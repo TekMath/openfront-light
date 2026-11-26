@@ -1,16 +1,16 @@
-import { AttackExecution } from "../src/core/execution/AttackExecution";
-import { NationAllianceBehavior } from "../src/core/execution/nation/NationAllianceBehavior";
-import { NationEmojiBehavior } from "../src/core/execution/nation/NationEmojiBehavior";
-import { AiAttackBehavior } from "../src/core/execution/utils/AiAttackBehavior";
 import {
   Difficulty,
-  Game,
-  Player,
   PlayerInfo,
   PlayerType,
   UnitType,
-} from "../src/core/game/Game";
-import { PseudoRandom } from "../src/core/PseudoRandom";
+} from "@openfront/engine-api/game/GameTypes";
+import { PseudoRandom } from "@openfront/engine-lib/PseudoRandom";
+import { AttackExecution } from "@openfront/engine/execution/AttackExecution";
+import { NationAllianceBehavior } from "@openfront/engine/execution/nation/NationAllianceBehavior";
+import { NationAttackBehavior } from "@openfront/engine/execution/nation/NationAttackBehavior";
+import { NationEmojiBehavior } from "@openfront/engine/execution/nation/NationEmojiBehavior";
+import { NationWarshipBehavior } from "@openfront/engine/execution/nation/NationWarshipBehavior";
+import { Game, Player } from "@openfront/engine/game/Game";
 import { setup } from "./util/Setup";
 import { executeTicks } from "./util/utils";
 
@@ -53,7 +53,7 @@ interface BehaviorEnv {
   game: Game;
   nation: Player;
   enemy: Player;
-  attackBehavior: AiAttackBehavior;
+  attackBehavior: NationAttackBehavior;
 }
 
 /**
@@ -156,7 +156,7 @@ async function setupBehavior(
     nation,
     emojiBehavior,
   );
-  const attackBehavior = new AiAttackBehavior(
+  const attackBehavior = new NationAttackBehavior(
     new PseudoRandom(42),
     game,
     nation,
@@ -165,6 +165,12 @@ async function setupBehavior(
     0.0, // expandRatio
     allianceBehavior,
     emojiBehavior,
+    new NationWarshipBehavior(
+      new PseudoRandom(42),
+      game,
+      nation,
+      emojiBehavior,
+    ),
   );
 
   return { game, nation, enemy, attackBehavior };
@@ -177,7 +183,7 @@ function newAttacks(player: Player, before: number) {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe("AiAttackBehavior - nuked territory early-out", () => {
+describe("NationAttackBehavior - nuked territory early-out", () => {
   // The bug: `maybeAttack()` has an early expansion gate
   //   hasNonNukedTerraNullius =
   //     border.some((t) => !hasOwner(t) && !hasFallout(t)) ||
@@ -241,29 +247,6 @@ describe("AiAttackBehavior - nuked territory early-out", () => {
       // TerraNullius (the nuked territory).
       for (const attack of attacks) {
         expect(attack.target()).toBe(enemy);
-      }
-    });
-
-    test("maybeAttack early gate is bypassed when only nuked TN borders the nation", async () => {
-      // No enemy, no incoming attack. The early gate must NOT fire (there is
-      // no non-nuked TN). `attackBestTarget` falls through to the `nuked`
-      // strategy, which dispatches a land attack on TerraNullius — the
-      // intended behaviour from commit 58ec8b280.
-      const { game, nation, attackBehavior } = await setupBehavior(
-        Difficulty.Impossible,
-        { withEnemy: false },
-      );
-
-      expect(nation.incomingAttacks()).toHaveLength(0);
-
-      const before = nation.outgoingAttacks().length;
-      attackBehavior.maybeAttack();
-      executeTicks(game, 1);
-
-      const attacks = newAttacks(nation, before);
-      expect(attacks.length).toBeGreaterThan(0);
-      for (const attack of attacks) {
-        expect(attack.target().isPlayer()).toBe(false);
       }
     });
   });
@@ -345,6 +328,12 @@ describe("AiAttackBehavior - nuked territory early-out", () => {
         Difficulty.Impossible,
         { withEnemy: true, nationTroops: 5_000_000, enemyTroops: 4_000_000 },
       );
+      // Cities lift the nation's max troops above its army
+      for (const tile of Array.from(nation.tiles()).slice(0, 4)) {
+        const city = nation.buildUnit(UnitType.City, tile, {});
+        for (let i = 0; i < 4; i++) city.increaseLevel();
+      }
+      expect(nation.troops()).toBeLessThan(game.config().maxTroops(nation));
       // Starting troops (Impossible nation / infinite-troops human baseline)
       // are added on top of the requested amounts, so read the real totals
       // back rather than assuming the opts values.
@@ -404,5 +393,80 @@ describe("AiAttackBehavior - nuked territory early-out", () => {
       // Floored to ~5% of current troops rather than the full army.
       expect(totalSent).toBeLessThanOrEqual(Math.ceil(nationTroops * 0.05));
     });
+  });
+});
+
+describe("NationAttackBehavior - troops kept home when taking free land", () => {
+  function withRatios(game: Game, nation: Player) {
+    const emoji = new NationEmojiBehavior(new PseudoRandom(42), game, nation);
+    return new NationAttackBehavior(
+      new PseudoRandom(42),
+      game,
+      nation,
+      0.5, // triggerRatio
+      0.3, // reserveRatio
+      0.15, // expandRatio
+      new NationAllianceBehavior(new PseudoRandom(42), game, nation, emoji),
+      emoji,
+      new NationWarshipBehavior(new PseudoRandom(42), game, nation, emoji),
+    );
+  }
+
+  it.each([
+    [Difficulty.Impossible, true, 0.3],
+    [Difficulty.Easy, true, 0.3],
+    [Difficulty.Impossible, false, 0.15],
+  ])(
+    "%s, bordering fallout: %s, keeps %d of its max troops",
+    async (difficulty, withNuke, ratio) => {
+      const { game, nation } = await setupBehavior(difficulty, {
+        withEnemy: false,
+        withNuke,
+      });
+      expect(
+        withRatios(game, nation)["reserveTroops"](game.terraNullius()),
+      ).toBeCloseTo(game.config().maxTroops(nation) * ratio);
+    },
+  );
+
+  it.each([
+    [true, false],
+    [false, true],
+  ])(
+    "with a fifth of its max troops, bordering fallout: %s, takes free land: %s",
+    async (withNuke, attacks) => {
+      const { game, nation } = await setupBehavior(Difficulty.Impossible, {
+        withEnemy: false,
+        withNuke,
+      });
+      nation.setTroops(Math.floor(game.config().maxTroops(nation) * 0.2));
+      expect(withRatios(game, nation).sendAttack(game.terraNullius())).toBe(
+        attacks,
+      );
+    },
+  );
+
+  // A high starting gold measures the expansion reserve without cities, but troops grown far
+  // past that keep what they would at the trigger ratio: 0.15 / 0.5 of them
+  it("Impossible with a high starting gold and 10x its max troops without cities keeps 30% of them", async () => {
+    const game = await setup(
+      "big_plains",
+      { difficulty: Difficulty.Impossible, startingGold: 1_000_000_000 },
+      [new PlayerInfo("nation", PlayerType.Nation, null, "nation_id")],
+    );
+    const nation = game.player("nation_id");
+    conquerRect(game, nation, 60, 60, 80, 80);
+    for (const tile of Array.from(nation.tiles()).slice(0, 4)) {
+      const city = nation.buildUnit(UnitType.City, tile, {});
+      for (let i = 0; i < 20; i++) city.increaseLevel();
+    }
+    nation.setTroops(game.config().maxTroopsWithoutCities(nation) * 10);
+    expect(game.config().maxTroops(nation)).toBeGreaterThan(
+      nation.troops() * 2,
+    );
+
+    expect(
+      withRatios(game, nation)["reserveTroops"](game.terraNullius()),
+    ).toBeCloseTo(nation.troops() * 0.3);
   });
 });

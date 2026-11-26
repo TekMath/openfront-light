@@ -1,11 +1,23 @@
 import {
   type ClanBansResponse,
   ClanBansResponseSchema,
+  ClanBoostPurchaseResponseSchema,
+  type ClanBoostStatus,
+  ClanBoostStatusSchema,
+  type ClanBrowseFilter,
   type ClanBrowseResponse,
   ClanBrowseResponseSchema,
+  type ClanBrowseSort,
   type ClanDiscord,
+  type ClanDonationLeaderboardResponse,
+  ClanDonationLeaderboardResponseSchema,
+  type ClanDonationPeriod,
   type ClanDonationsResponse,
   ClanDonationsResponseSchema,
+  type ClanFundRecipient,
+  ClanFundRecipientsResponseSchema,
+  type ClanFundTransfersResponse,
+  ClanFundTransfersResponseSchema,
   type ClanGameFilter,
   type ClanGamesResponse,
   ClanGamesResponseSchema,
@@ -19,7 +31,7 @@ import {
   ClanRequestsResponseSchema,
   DiscordInviteResponseSchema,
   JoinClanResponseSchema,
-} from "../core/ClanApiSchemas";
+} from "@openfront/shared/ClanApiSchemas";
 import { getApiBase, getUserMe } from "./Api";
 import { getAuthHeader } from "./Auth";
 
@@ -27,10 +39,21 @@ const CLAN_EXISTS_FETCH_TIMEOUT_MS = 3000;
 export type {
   ClanBan,
   ClanBansResponse,
+  ClanBoostStatus,
+  ClanBoostTier,
+  ClanBrowseFilter,
   ClanBrowseResponse,
+  ClanBrowseSort,
   ClanDiscord,
   ClanDonation,
+  ClanDonationLeaderboardResponse,
+  ClanDonationPeriod,
   ClanDonationsResponse,
+  ClanDonor,
+  ClanFundRecipient,
+  ClanFundTransfer,
+  ClanFundTransfersResponse,
+  ClanFundTransferStatus,
   ClanGame,
   ClanGameFilter,
   ClanGamePlayer,
@@ -43,7 +66,7 @@ export type {
   ClanMemberStats,
   ClanMemberWL,
   ClanRequestsResponse,
-} from "../core/ClanApiSchemas";
+} from "@openfront/shared/ClanApiSchemas";
 
 async function clanFetch(
   path: string,
@@ -94,16 +117,80 @@ export async function fetchClanLeaderboard(): Promise<
   }
 }
 
+const CLAN_BROWSE_SEED_KEY = "clanBrowseSeed";
+
+// Seeds the browse list's default shuffle. Signed in, the public id, so the
+// order follows the player across devices; signed out, a random value kept in
+// localStorage. Never the persistent id, which must not leave the client.
+async function clanBrowseSeed(): Promise<string> {
+  const me = await getUserMe();
+  if (me) return me.player.publicId;
+  try {
+    const stored = localStorage.getItem(CLAN_BROWSE_SEED_KEY);
+    if (stored) return stored;
+    const fresh = crypto.randomUUID().replace(/-/g, "");
+    localStorage.setItem(CLAN_BROWSE_SEED_KEY, fresh);
+    return fresh;
+  } catch {
+    // Storage blocked: every visitor shares the hour's order.
+    return "";
+  }
+}
+
+// The seed page 1 was fetched with, reused for the pages after it: signing in
+// mid-browse would otherwise switch seeds and repeat or skip clans.
+let pagedBrowseSeed: string | null = null;
+
+// Server sort field and direction for each browse option. Search ignores
+// "random" and keeps the server's alphabetical default.
+const BROWSE_SORT_PARAMS: Record<
+  ClanBrowseSort,
+  { sortField: string; sortOrder?: "ASC" | "DESC" }
+> = {
+  random: { sortField: "random" },
+  memberCount: { sortField: "memberCount", sortOrder: "DESC" },
+  winScore: { sortField: "winScore", sortOrder: "DESC" },
+  winScoreLow: { sortField: "winScore", sortOrder: "ASC" },
+  createdAt: { sortField: "createdAt", sortOrder: "ASC" },
+  softBalance: { sortField: "softBalance", sortOrder: "DESC" },
+  name: { sortField: "name", sortOrder: "ASC" },
+};
+
+const BROWSE_FILTER_OPEN: Record<ClanBrowseFilter, string | undefined> = {
+  all: undefined,
+  open: "true",
+  inviteOnly: "false",
+};
+
 export async function fetchClans(
   search?: string,
   page = 1,
   limit = 20,
+  sort: ClanBrowseSort = "random",
+  bucket?: number,
+  filter: ClanBrowseFilter = "all",
 ): Promise<ClanBrowseResponse | false> {
   try {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("limit", String(limit));
-    if (search && search.length >= 2) params.set("search", search);
+    const searching = !!search && search.length >= 2;
+    if (searching) params.set("search", search);
+    if (!(searching && sort === "random")) {
+      const { sortField, sortOrder } = BROWSE_SORT_PARAMS[sort];
+      params.set("sortField", sortField);
+      if (sortOrder) params.set("sortOrder", sortOrder);
+    }
+    const open = BROWSE_FILTER_OPEN[filter];
+    if (open) params.set("open", open);
+    if (sort === "random" && !searching) {
+      if (page === 1 || pagedBrowseSeed === null) {
+        pagedBrowseSeed = await clanBrowseSeed();
+      }
+      const seed = pagedBrowseSeed;
+      if (seed) params.set("seed", seed);
+      if (bucket !== undefined) params.set("bucket", String(bucket));
+    }
     const res = await clanFetch(`/clans?${params}`);
     if (!res.ok) return false;
     const json = await res.json();
@@ -189,7 +276,8 @@ export type ClanMemberSort =
   | "winsRanked"
   | "lossesRanked"
   | "wins1v1"
-  | "losses1v1";
+  | "losses1v1"
+  | "eloContributed";
 export type ClanMemberOrder = "asc" | "desc";
 
 export async function fetchClanMembers(
@@ -224,13 +312,17 @@ export async function fetchClanMembers(
   }
 }
 
+// `source: "boosted"` marks a join started from the browser's boosted block
+// (analytics only).
 export async function joinClan(
   tag: string,
+  source?: "boosted",
 ): Promise<
   { status: "joined" | "requested" } | { error: string; reason?: string }
 > {
   try {
-    const res = await clanFetch(`/clans/${encodeURIComponent(tag)}/join`, {
+    const qs = source ? `?source=${source}` : "";
+    const res = await clanFetch(`/clans/${encodeURIComponent(tag)}/join${qs}`, {
       method: "POST",
     });
     if (res.status === 409) {
@@ -410,9 +502,13 @@ export async function disbandClan(
       method: "DELETE",
     });
     if (!res.ok) {
-      return {
-        error: "clan_modal.error_failed",
-      };
+      // While fund payouts are on, the API refuses to disband a clan whose
+      // fund still holds Plutonium.
+      const body: { code?: unknown } = await res.json().catch(() => ({}));
+      if (res.status === 400 && body.code === "fund_not_empty") {
+        return { error: "clan_modal.disband_fund_not_empty" };
+      }
+      return { error: "clan_modal.error_failed" };
     }
     return true;
   } catch {
@@ -663,6 +759,159 @@ export async function donateToClan(
 export type ClanDonationsFetchError = "forbidden" | "failed";
 
 /**
+ * Leader only: whether each listed member can receive Plutonium from the clan
+ * fund right now, and why not. One row per id, in order. `false` on any
+ * failure, so the send page can fall back to letting the server decide.
+ */
+export async function fetchClanFundRecipients(
+  tag: string,
+  publicIds: string[],
+): Promise<ClanFundRecipient[] | false> {
+  if (publicIds.length === 0) return [];
+  try {
+    const params = new URLSearchParams();
+    params.set("ids", publicIds.join(","));
+    const res = await clanFetch(
+      `/clans/${encodeURIComponent(tag)}/fund_transfers/eligibility?${params}`,
+    );
+    if (!res.ok) return false;
+    const parsed = ClanFundRecipientsResponseSchema.safeParse(await res.json());
+    if (!parsed.success) {
+      console.warn(
+        "fetchClanFundRecipients: Zod validation failed",
+        parsed.error,
+      );
+      return false;
+    }
+    return parsed.data.results;
+  } catch {
+    return false;
+  }
+}
+
+// Refusal codes from POST /clans/:tag/fund_transfers, each with a
+// translation key.
+const SEND_FUNDS_ERRORS: Record<string, string> = {
+  transfers_disabled: "clan_modal.send_funds_error_disabled",
+  frozen: "clan_modal.send_funds_error_frozen",
+  not_leader: "clan_modal.send_funds_error_not_leader",
+  leader_too_recent: "clan_modal.send_funds_error_leader_too_recent",
+  sender_not_eligible: "clan_modal.send_funds_error_sender_not_eligible",
+  self_transfer: "clan_modal.send_funds_error_self",
+  not_member: "clan_modal.send_funds_error_not_member",
+  membership_too_recent: "clan_modal.send_funds_error_too_recent",
+  recipient_not_eligible: "clan_modal.send_funds_error_not_eligible",
+  clan_daily_limit: "clan_modal.send_funds_error_clan_limit",
+  recipient_daily_limit: "clan_modal.send_funds_error_recipient_limit",
+  insufficient_balance: "clan_modal.send_funds_error_insufficient",
+};
+
+/**
+ * Why a send failed, as far as the client can tell:
+ * - `refused`: the server refused it with one of its send rules (a 400 with
+ *   a code from SEND_FUNDS_ERRORS), so nothing was stored.
+ * - `unknown`: anything else, which says nothing about an earlier send under
+ *   the same key: no answer, a 5xx, a 401 (signed out), a 403, a 429 or a 400
+ *   without a known code. The send may have gone through; repeating it with
+ *   the same key is safe.
+ * - `earlier_send`: the key was already used for a different member or
+ *   amount, so an earlier send from this page went through.
+ */
+export type SendClanFundsOutcome = "refused" | "unknown" | "earlier_send";
+
+/**
+ * The leader sends Plutonium from the clan fund to another member. Final for
+ * the clan; only staff can reverse it. `amount` is a decimal integer string
+ * (see donateToClan). The page reuses one `idempotencyKey` until a send is
+ * confirmed, so a retry after a dead request can't send twice. Errors come
+ * back as a translation key and an outcome.
+ */
+export async function sendClanFunds(
+  tag: string,
+  recipient: string,
+  amount: string,
+  idempotencyKey: string,
+): Promise<true | { error: string; outcome: SendClanFundsOutcome }> {
+  const unknown = {
+    error: "clan_modal.send_funds_error_unknown",
+    outcome: "unknown",
+  } as const;
+  let res: Response;
+  try {
+    res = await clanFetch(`/clans/${encodeURIComponent(tag)}/fund_transfers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipient, amount, idempotencyKey }),
+    });
+  } catch {
+    return unknown;
+  }
+  if (res.ok) return true;
+  if (res.status >= 500) return unknown;
+  // These say who may send, not whether an earlier send went through, so
+  // they keep the key (outcome unknown) while still saying what's wrong.
+  if (res.status === 401)
+    return { error: "clan_modal.sign_in_for_clans", outcome: "unknown" };
+  if (res.status === 403)
+    return {
+      error: "clan_modal.send_funds_error_not_leader",
+      outcome: "unknown",
+    };
+  if (res.status === 429)
+    return {
+      error: "clan_modal.send_funds_error_rate_limited",
+      outcome: "unknown",
+    };
+  const body = (await res.json().catch(() => ({}))) as { code?: string };
+  if (body.code === "idempotency_conflict") {
+    return {
+      error: "clan_modal.send_funds_error_earlier_send",
+      outcome: "earlier_send",
+    };
+  }
+  const refusal = body.code ? SEND_FUNDS_ERRORS[body.code] : undefined;
+  if (res.status === 400 && refusal) {
+    return { error: refusal, outcome: "refused" };
+  }
+  return { ...unknown, error: "clan_modal.error_failed" };
+}
+
+/**
+ * Members-only page of the clan's fund transfers, newest first, with the
+ * status that decides whether the viewer is offered "Send". `unavailable`
+ * when the API has no such endpoint (it predates the feature).
+ */
+export async function fetchClanFundTransfers(
+  tag: string,
+  opts: { page?: number; limit?: number } = {},
+): Promise<
+  ClanFundTransfersResponse | { error: ClanDonationsFetchError | "unavailable" }
+> {
+  try {
+    const params = new URLSearchParams();
+    params.set("page", String(opts.page ?? 1));
+    params.set("limit", String(opts.limit ?? 10));
+    const res = await clanFetch(
+      `/clans/${encodeURIComponent(tag)}/fund_transfers?${params}`,
+    );
+    if (res.status === 403) return { error: "forbidden" };
+    if (res.status === 404) return { error: "unavailable" };
+    if (!res.ok) return { error: "failed" };
+    const parsed = ClanFundTransfersResponseSchema.safeParse(await res.json());
+    if (!parsed.success) {
+      console.warn(
+        "fetchClanFundTransfers: Zod validation failed",
+        parsed.error,
+      );
+      return { error: "failed" };
+    }
+    return parsed.data;
+  } catch {
+    return { error: "failed" };
+  }
+}
+
+/**
  * Members-only page of donations made to the clan, newest first. `currencyType`
  * narrows to one currency (and scopes `total`); omitted means both. The
  * endpoint rejects empty query values, so a param is only sent when set.
@@ -693,6 +942,47 @@ export async function fetchClanDonations(
   }
 }
 
+/**
+ * Members-only ranking of current members by net donations of one currency,
+ * over all time or the last 7 (`week`) / 30 (`month`) days.
+ */
+export async function fetchClanDonationLeaderboard(
+  tag: string,
+  opts: {
+    currencyType: ClanCurrencyType;
+    period?: ClanDonationPeriod;
+    page?: number;
+    limit?: number;
+  },
+): Promise<
+  ClanDonationLeaderboardResponse | { error: ClanDonationsFetchError }
+> {
+  try {
+    const params = new URLSearchParams();
+    params.set("currencyType", opts.currencyType);
+    params.set("period", opts.period ?? "all");
+    params.set("page", String(opts.page ?? 1));
+    params.set("limit", String(opts.limit ?? 10));
+    const res = await clanFetch(
+      `/clans/${encodeURIComponent(tag)}/donations/leaderboard?${params}`,
+    );
+    if (res.status === 403) return { error: "forbidden" };
+    if (!res.ok) return { error: "failed" };
+    const json = await res.json();
+    const parsed = ClanDonationLeaderboardResponseSchema.safeParse(json);
+    if (!parsed.success) {
+      console.warn(
+        "fetchClanDonationLeaderboard: Zod validation failed",
+        parsed.error,
+      );
+      return { error: "failed" };
+    }
+    return parsed.data;
+  } catch {
+    return { error: "failed" };
+  }
+}
+
 export async function fetchClanBans(
   tag: string,
   page = 1,
@@ -715,5 +1005,61 @@ export async function fetchClanBans(
     return parsed.data;
   } catch {
     return false;
+  }
+}
+
+export async function fetchClanBoostStatus(
+  tag: string,
+): Promise<ClanBoostStatus | false> {
+  try {
+    const res = await clanFetch(`/clans/${encodeURIComponent(tag)}/boost`);
+    if (!res.ok) return false;
+    const parsed = ClanBoostStatusSchema.safeParse(await res.json());
+    if (!parsed.success) {
+      console.warn("fetchClanBoostStatus: Zod validation failed", parsed.error);
+      return false;
+    }
+    return parsed.data;
+  } catch {
+    return false;
+  }
+}
+
+// Refusal codes from POST /clans/:tag/boost, each with a translation key.
+const BOOST_ERRORS: Record<string, string> = {
+  not_enough_members: "clan_modal.boost_error_not_enough_members",
+  not_recently_active: "clan_modal.boost_error_not_recently_active",
+  daily_limit: "clan_modal.boost_error_daily_limit",
+  insufficient_balance: "clan_modal.boost_error_insufficient_balance",
+  unknown_tier: "clan_modal.boost_error_unknown_tier",
+  idempotency_conflict: "clan_modal.boost_error_key_conflict",
+};
+
+export async function buyClanBoost(
+  tag: string,
+  tier: string,
+  idempotencyKey: string,
+): Promise<{ endsAt: string } | { error: string }> {
+  try {
+    const res = await clanFetch(`/clans/${encodeURIComponent(tag)}/boost`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tier, idempotencyKey }),
+    });
+    if (res.status === 403)
+      return { error: "clan_modal.boost_error_forbidden" };
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { code?: string };
+      return {
+        error:
+          (body.code && BOOST_ERRORS[body.code]) ??
+          "clan_modal.boost_error_failed",
+      };
+    }
+    const parsed = ClanBoostPurchaseResponseSchema.safeParse(await res.json());
+    if (!parsed.success) return { error: "clan_modal.boost_error_failed" };
+    return { endsAt: parsed.data.endsAt };
+  } catch {
+    return { error: "clan_modal.error_network" };
   }
 }

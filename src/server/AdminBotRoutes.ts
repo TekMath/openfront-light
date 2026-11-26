@@ -1,3 +1,21 @@
+import {
+  CustomGameMap,
+  GameMode,
+  GameType,
+} from "@openfront/engine-api/game/GameTypes";
+import {
+  ADMIN_BOT_CLIENT_ID,
+  type GameConfig,
+  GameConfigSchema,
+  type GameID,
+  ID,
+  IntentSchema,
+} from "@openfront/engine-api/Schemas";
+import {
+  type LobbyAccent,
+  LobbyAccentSchema,
+  LobbyLabelSchema,
+} from "@openfront/shared/WireSchemas";
 import crypto from "crypto";
 import type {
   Express,
@@ -8,18 +26,6 @@ import type {
 } from "express";
 import type { Logger } from "winston";
 import { z } from "zod";
-import { GameMode, GameType } from "../core/game/Game";
-import {
-  ADMIN_BOT_CLIENT_ID,
-  type GameConfig,
-  GameConfigSchema,
-  type GameID,
-  ID,
-  IntentSchema,
-  type LobbyAccent,
-  LobbyAccentSchema,
-  LobbyLabelSchema,
-} from "../core/Schemas";
 import type { GameManager } from "./GameManager";
 import type { GameServer } from "./GameServer";
 import { ServerEnv } from "./ServerEnv";
@@ -94,6 +100,11 @@ function parseCreateGameRequest(reqBody: unknown): ParsedCreateGame {
   // it, so a caller can never supply a valid pool; create_pool builds one.
   if (config.pool !== undefined) {
     return fail(400, { error: "pool_is_generated" });
+  }
+  // A Custom map's files come with a scenario start, which a lobby can't carry
+  // yet, so lobbies are stock maps only (as on the public create_game route).
+  if (config.gameMap === CustomGameMap) {
+    return fail(400, { error: "custom_map_unsupported" });
   }
   // Optional public listing (#4480). Read alongside the config, not from it:
   // `listed` lives on GameServer precisely so it can't be smuggled through
@@ -248,7 +259,7 @@ export function registerAdminBotRoutes(opts: {
   // Validate game id format and that this worker owns it. Returns false and
   // sends the error response when the id is bad/misrouted.
   const ownsGame = (id: string, res: Response): boolean => {
-    if (!ID.safeParse(id).success) {
+    if (!ID.validate(id)) {
       res.status(400).json({ error: "Invalid game ID" });
       return false;
     }

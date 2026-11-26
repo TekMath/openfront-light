@@ -18,6 +18,8 @@ vi.mock("lit/decorators.js", () => ({
 vi.mock("../../../../src/client/Utils", () => ({
   translateText: vi.fn((key: string) => key),
   renderDuration: vi.fn(),
+}));
+vi.mock("@openfront/engine-lib/Format", () => ({
   renderNumber: vi.fn(),
   renderTroops: vi.fn(),
 }));
@@ -25,6 +27,8 @@ vi.mock("../../../../src/client/Utils", () => ({
 vi.mock("../../../../src/client/components/ui/ActionButton", () => ({
   actionButton: vi.fn((props: unknown) => props),
 }));
+
+vi.mock("../../../../src/client/components/LevelBadge", () => ({}));
 
 vi.mock("../../../../src/client/InGameModal", () => ({
   showInGameConfirm: vi.fn(),
@@ -80,6 +84,29 @@ describe("PlayerPanel - alliance countdown keeps updating after local player dea
     await (panel as any).tick();
 
     expect((panel as any).requestUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  test("tick() counts the alliance down in whole seconds and clears it once expired", async () => {
+    let expiresAt = 705;
+    const myPlayer = {
+      isAlive: () => true,
+      actions: () =>
+        Promise.resolve({ interaction: { allianceInfo: { expiresAt } } }),
+    } as unknown as PlayerView;
+    (panel as any).g = {
+      owner: () => null,
+      myPlayer: () => myPlayer,
+      ticks: () => 100,
+    };
+
+    // 605 ticks left is 60.5 seconds, shown as 60.
+    await (panel as any).tick();
+    expect((panel as any).allianceExpirySeconds).toBe(60);
+
+    expiresAt = 100;
+    await (panel as any).tick();
+    expect((panel as any).allianceExpirySeconds).toBeNull();
+    expect((panel as any).allianceExpiryText).toBeNull();
   });
 
   test("tick() does not repaint when the panel is hidden", async () => {

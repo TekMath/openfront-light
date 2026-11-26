@@ -1,6 +1,6 @@
+import { assetUrl } from "@openfront/shared/AssetUrls";
 import { html, LitElement } from "lit";
 import { customElement } from "lit/decorators.js";
-import { assetUrl } from "../../core/AssetUrls";
 
 const MOBILE_ITEM =
   "nav-menu-item block w-full text-left font-bold uppercase tracking-[0.05em] " +
@@ -23,7 +23,7 @@ export class MobileNavBar extends LitElement {
 
     const current = window.currentPageId;
     if (current) {
-      this.updateComplete.then(() => {
+      void this.updateComplete.then(() => {
         this._updateActiveState(current);
       });
     }

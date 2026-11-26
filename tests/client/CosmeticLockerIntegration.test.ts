@@ -1,20 +1,20 @@
+import type { UserMeResponse } from "@openfront/shared/ApiSchemas";
+import type { Cosmetics } from "@openfront/shared/CosmeticSchemas";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserMe } from "../../src/client/Api";
 import { userAuth } from "../../src/client/Auth";
-import { fetchCosmetics } from "../../src/client/Cosmetics";
-import "../../src/client/InventoryModal";
-import type { InventoryModal } from "../../src/client/InventoryModal";
-import { modalRouter } from "../../src/client/ModalRouter";
-import "../../src/client/Store";
-import type { StoreModal } from "../../src/client/Store";
 import type { CosmeticCard } from "../../src/client/components/CosmeticCard";
-import type { UserMeResponse } from "../../src/core/ApiSchemas";
-import type { Cosmetics } from "../../src/core/CosmeticSchemas";
+import "../../src/client/InventoryModal";
+import { fetchCosmetics } from "../../src/client/Cosmetics";
+import type { InventoryModal } from "../../src/client/InventoryModal";
+import "../../src/client/Store";
+import { modalRouter } from "../../src/client/ModalRouter";
+import type { StoreModal } from "../../src/client/Store";
 import {
   PATTERN_KEY,
   USER_SETTINGS_CHANGED_EVENT,
   UserSettings,
-} from "../../src/core/game/UserSettings";
+} from "../../src/client/UserSettings";
 
 vi.mock("../../src/client/Api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/Api")>()),
@@ -96,11 +96,17 @@ const redKey = "pattern:stripes:red";
 const blueKey = "pattern:stripes:blue";
 const greenKey = "pattern:stripes:green";
 
+// The Store's cards and the Inventory's tiles share the parts these tests use:
+// the item, its colour variants and its state.
 function cardFor(
   root: InventoryModal | StoreModal,
   key: string,
 ): CosmeticCard | undefined {
-  return [...root.querySelectorAll<CosmeticCard>("cosmetic-card")].find(
+  return [
+    ...root.querySelectorAll<CosmeticCard>(
+      "cosmetic-card, inventory-item-tile",
+    ),
+  ].find(
     (candidate) =>
       candidate.resolved.key === key ||
       candidate.variants.some((variant) => variant.key === key),
@@ -242,12 +248,16 @@ describe("Cosmetic locker integration", () => {
     new UserSettings().setSelectedPatternName(blueKey);
     inventory.open({ tab: "skins" });
     await inventory.updateComplete;
+    // cardFor finds the group by any of its variants, so check which one
+    // the tile shows, not only that it is equipped.
     expect(cardFor(inventory, blueKey)?.state).toBe("equipped");
+    expect(cardFor(inventory, blueKey)?.activeVariantKey).toBe(blueKey);
 
     new UserSettings().setSelectedPatternName(greenKey);
     window.dispatchEvent(new CustomEvent(settingsEvent));
     await inventory.updateComplete;
     expect(cardFor(inventory, greenKey)?.state).toBe("equipped");
+    expect(cardFor(inventory, greenKey)?.activeVariantKey).toBe(greenKey);
   });
 
   it("keeps accessible controls and phone layout markers across both surfaces", async () => {
@@ -263,7 +273,7 @@ describe("Cosmetic locker integration", () => {
     const storeCard = cardFor(store, redKey)!;
     for (const cosmeticCard of [inventoryCard, storeCard]) {
       const main = cosmeticCard.querySelector<HTMLButtonElement>(
-        "button[data-cosmetic-main]",
+        "button[data-cosmetic-main], button[data-tile-main]",
       );
       expect(main?.tagName).toBe("BUTTON");
       expect(main?.type).toBe("button");

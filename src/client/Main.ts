@@ -1,51 +1,67 @@
-import { ClientEnv } from "src/client/ClientEnv";
-import { renderNavVersion } from "src/client/GameVersion";
-import { UserMeResponse } from "../core/ApiSchemas";
-import { assetUrl } from "../core/AssetUrls";
-import { EventBus } from "../core/EventBus";
+// First: before any component module fetches the catalog.
+import "./ExpectExperiments";
+import { GAME_ID_REGEX } from "@openfront/engine-api/Schemas";
 import {
-  GAME_ID_REGEX,
+  clientAuth,
+  isRewardClaimable,
+  UserMeResponse,
+} from "@openfront/shared/ApiSchemas";
+import { assetUrl } from "@openfront/shared/AssetUrls";
+import { GameEnv } from "@openfront/shared/configuration/Env";
+import { EventBus } from "@openfront/shared/EventBus";
+import { toWireGameStartInfo } from "@openfront/shared/SharedUtil";
+import {
   GameInfo,
   GameRecord,
-  GameStartInfo,
   GroupTokenEvent,
   LobbyInfoEvent,
   PublicGameInfo,
-} from "../core/Schemas";
-import { toWireGameStartInfo } from "../core/Util";
-import { GameEnv } from "../core/configuration/Config";
-import { UserSettings } from "../core/game/UserSettings";
-import "./AccountModal";
-import "./AccountSettingsModal";
-import { getUserMe, invalidateUserMe } from "./Api";
+  WireGameStartInfo,
+} from "@openfront/shared/WireSchemas";
+import { ClientEnv } from "src/client/ClientEnv";
+import { renderNavVersion } from "src/client/GameVersion";
+import { responseHasLinkedIdentity } from "./AccountIdentity";
+import { wasAdmitted } from "./AdmittedLobbies";
+import {
+  getUserMe,
+  invalidateUserMe,
+  markMessageSeen,
+  markNoticeSeen,
+} from "./Api";
 import {
   getDesktopSessionState,
-  reauthAfterCrazyGamesChange,
+  reauthAfterPortalChange,
   retrySteamSignIn,
   userAuth,
+  type UserAuth,
 } from "./Auth";
 import {
   bootInterruptsAllowed,
   CLAIM_PROMPT_KEY,
   claimPromptDue,
   claimPromptStringsReady,
+  giftEndingStringsReady,
   joinOwnsInFlightFlag,
   lapseShownAfterDispatch,
   nextBootInterrupt,
   parseClaimPromptStore,
+  renewalPushedDueThisLaunch,
+  renewalPushedOf,
+  renewalPushedStringsReady,
+  reportThanksDueThisLaunch,
+  reportThanksStringsReady,
   runBootInterrupt,
   steamGrantStringsReady,
 } from "./BootInterrupts";
-import "./ChangeUsernameModal";
-import "./ClanModal";
-import { joinLobby, type JoinLobbyResult } from "./ClientGameRunner";
+import type { JoinLobbyResult } from "./ClientGameRunner";
 import {
+  broadcastFreshUserMe,
+  fetchCosmetics,
   getPlayerCosmeticsRefs,
   handlePurchaseReturn,
+  subscriptionTier,
   translateCosmetic,
 } from "./Cosmetics";
-import { updateCrazyGamesNavButton } from "./CrazyGamesAccountButton";
-import { crazyGamesSDK } from "./CrazyGamesSDK";
 import {
   consumeCreatorCodePath,
   resumePendingCreatorCode,
@@ -54,29 +70,40 @@ import { desktopPresence, type PresencePayload } from "./DesktopPresence";
 import { subscribeDesktopSessionRecovery } from "./DesktopSessionRecovery";
 import {
   desktopUpdate,
+  getDesktopUpdateState,
   isDesktopShell,
+  isSteamShell,
   type DesktopUpdateState,
 } from "./DesktopShell";
-import "./GameModeSelector";
+import {
+  claimGameClientReload,
+  loadGameClient,
+  prefetchGameClient,
+} from "./GameClientLoader";
 import {
   GameModeSelector,
   joinIsGateable,
   reportMultiplayerRefusal,
   shouldBlockJoin,
 } from "./GameModeSelector";
+import { gamePortal } from "./GamePortal";
 import { GameStartingModal } from "./GameStartingModal";
-import "./GameStatsModal";
-import { HelpModal } from "./HelpModal";
-import { HostLobbyModal as HostPrivateLobbyModal } from "./HostLobbyModal";
+import type { HelpModal } from "./HelpModal";
+import type { HostLobbyModal as HostPrivateLobbyModal } from "./HostLobbyModal";
 import { showInGameAlert, showInGameConfirm } from "./InGameModal";
-import "./InventoryModal";
-import { JoinLobbyModal } from "./JoinLobbyModal";
+import type { JoinLobbyModal } from "./JoinLobbyModal";
+// The LangSelector class is used as a type; retain this for registration.
+// oxlint-disable-next-line import/no-duplicates -- Required custom-element registration.
 import "./LangSelector";
 import { LangSelector } from "./LangSelector";
 import { initLayout } from "./Layout";
-import "./LeaderboardModal";
-import "./Matchmaking";
-import { MatchmakingModal } from "./Matchmaking";
+import { loadModal, prefetchModals, whenModalLoaded } from "./LazyModals";
+import {
+  SendKickPlayerIntentEvent,
+  SendToggleGameStartTimer,
+  SendUpdateGameConfigIntentEvent,
+} from "./LobbyEvents";
+import type { MatchmakingModal, MatchmakingMode } from "./Matchmaking";
 import {
   hideMenuChrome,
   menuChromeIsTornDown,
@@ -85,25 +112,30 @@ import {
 import { modalRouter } from "./ModalRouter";
 import { updateAccountNavButton } from "./NavAccountButton";
 import { initNavigation } from "./Navigation";
-import "./NewsModal";
 import { capturePagePin } from "./PagePin";
+import { setPurchaseAccountRefresh, watchPlayPurchases } from "./Payments";
 import { fallbackPlayerName, LAPSE_NOTICE_KEY } from "./PlayerName";
-import "./PlayerProfileModal";
+import { updatePortalNavButton } from "./PortalAccountButton";
+import { shouldStartPortalTutorial } from "./PortalTutorial";
 import {
   GroupTokenTracker,
   presenceLobbyId,
   withGroupToken,
 } from "./PresenceGroup";
-import { RewardsModal } from "./RewardsModal";
+import { fetchMyGameXp, fetchProgressionConfig } from "./ProgressionApi";
+import { startProvisionalProgress } from "./ProvisionalProgress";
+import { consumeRequeueUrl } from "./RequeueUrl";
+import type { RewardsModal } from "./RewardsModal";
 import {
   ensureServerList,
   redirectToGameVersion,
   setServerListInGame,
   startServerListPolling,
 } from "./ServerList";
-import "./SinglePlayerModal";
-import { SinglePlayerModal } from "./SinglePlayerModal";
+import type { SinglePlayerModal } from "./SinglePlayerModal";
 import {
+  giftEndingDue,
+  paidFactsOf,
   parseSteamGrantStore,
   recordSteamGrant,
   STEAM_GRANT_NOTICE_KEY,
@@ -111,25 +143,25 @@ import {
   steamGrantWelcomeDue,
 } from "./SteamGrantNotices";
 import { steamHandoffMode } from "./SteamHandoff";
-import "./SteamHandoffModal";
-import { SteamHandoffModal } from "./SteamHandoffModal";
+import type { SteamHandoffModal } from "./SteamHandoffModal";
 import {
   isSteamLinkHash,
   parseSteamLinkToken,
   resumePendingSteamLink,
+  type PendingLinkModal,
 } from "./SteamLink";
-import "./SteamLinkModal";
-import { SteamLinkModal } from "./SteamLinkModal";
+import type { SteamLinkModal } from "./SteamLinkModal";
+import { steamNoticeDue, steamNoticeStringsReady } from "./SteamNotices";
 import { steamSDK } from "./SteamSDK";
-import { StoreModal } from "./Store";
-import "./SubscriptionModal";
+import type { StoreModal } from "./Store";
 import { initTelemetry } from "./Telemetry";
-import { TokenLoginModal } from "./TokenLoginModal";
+import type { TokenLoginModal } from "./TokenLoginModal";
 import {
-  SendKickPlayerIntentEvent,
-  SendToggleGameStartTimer,
-  SendUpdateGameConfigIntentEvent,
-} from "./Transport";
+  clearTurnstilePass,
+  hasValidTurnstilePass,
+  readTurnstilePassTimestamp,
+  recordTurnstilePass,
+} from "./TurnstilePass";
 import {
   requestTurnstileToken,
   resolveTurnstileToken,
@@ -138,38 +170,47 @@ import {
   type TurnstileApi,
   type TurnstileToken,
 } from "./TurnstileToken";
-import "./UserSettingModal";
+// Before the first userMeResponse, for the modals that load after it.
+import "./UserMeBroadcast";
+import { loadExperiments } from "./Experiments";
+import { classicReplayHref } from "./replay/ReplayEntry";
+import { parseReplayViewerHash } from "./replay/ReplayViewerRoute";
+import type { ScenarioEditor } from "./scenario/ScenarioEditor";
+import { parseScenarioEditorHash } from "./scenario/ScenarioEditorRoute";
+import { tabAttention } from "./TabAttention";
+// The UsernameInput class is used as a type; retain this for registration.
+// oxlint-disable-next-line import/no-duplicates -- Required custom-element registration.
 import "./UsernameInput";
 import { UsernameInput } from "./UsernameInput";
-import {
-  apexPathFor,
-  currentPagePath,
-  flushReloadToast,
-  homeHref,
-  incrementGamesPlayed,
-  presenceMapKey,
-  translateText,
-} from "./Utils";
-import { isReplayShellHost } from "./VersionedReplay";
+import { UserSettings } from "./UserSettings";
 import "./components/BannedModal";
 import "./components/DesktopStatusBar";
 import "./components/MarketingConsentToast";
 import "./components/PurchaseNudgeModal";
-import { initAudioMixer } from "./sound/AudioMixer";
-import { startMenuMusic } from "./sound/MenuMusic";
 import {
   installCtrlWheelZoomBlocker,
   installDoubleTapZoomBlocker,
   installSafariPinchZoomBlocker,
 } from "./utilities/DisableSafariPinchZoom";
+import { playerProfileRouteArgs } from "./utilities/PlayerProfileUrl";
+import {
+  apexPathFor,
+  currentPagePath,
+  exitGame,
+  flushReloadToast,
+  homeHref,
+  incrementGamesPlayed,
+  presenceMapKey,
+  reloadForUpdate,
+  translateText,
+} from "./Utils";
+import { isReplayShellHost } from "./VersionedReplay";
 
 import "./components/DesktopNavBar";
-import "./components/DetailedGameViewModal";
 import "./components/Footer";
 import "./components/MainLayout";
 import "./components/MobileNavBar";
 import "./components/PlayPage";
-import "./components/RankedModal";
 import "./components/baseComponents/Button";
 import "./components/baseComponents/Modal";
 import "./styles.css";
@@ -177,7 +218,6 @@ import "./styles/core/typography.css";
 import "./styles/core/variables.css";
 import "./styles/layout/container.css";
 import "./styles/layout/header.css";
-import "./styles/modal/chat.css";
 
 declare global {
   interface Window {
@@ -194,8 +234,8 @@ declare global {
     "kick-player": CustomEvent;
     toggle_game_start_timer: CustomEvent;
     "join-changed": CustomEvent;
-    "open-matchmaking": CustomEvent<{ mode?: "1v1" | "2v2" } | undefined>;
-    "matchmaking-requeue": CustomEvent<{ mode?: "1v1" | "2v2" } | undefined>;
+    "open-matchmaking": CustomEvent<{ mode?: MatchmakingMode } | undefined>;
+    "matchmaking-requeue": CustomEvent<{ mode?: MatchmakingMode } | undefined>;
     userMeResponse: CustomEvent<UserMeResponse | false>;
     "session-cleared": CustomEvent;
     "leave-lobby": CustomEvent;
@@ -209,13 +249,18 @@ export interface JoinLobbyEvent {
   // Multiplayer games only have gameID, gameConfig is not known until game starts.
   gameID: string;
   // GameConfig only exists when playing a singleplayer game.
-  gameStartInfo?: GameStartInfo;
+  gameStartInfo?: WireGameStartInfo;
   // GameRecord exists when replaying an archived game.
   gameRecord?: GameRecord;
+  // A singleplayer game resumed from a saved game: the uncompressed snapshot
+  // the engine restores instead of starting fresh from gameStartInfo.
+  snapshot?: Uint8Array;
   source?: "public" | "private" | "host" | "matchmaking" | "singleplayer";
   publicLobbyInfo?: GameInfo | PublicGameInfo;
   // Watch without playing.
   spectator?: boolean;
+  // Host only: the play token the lobby was created under (see createLobby).
+  creatorToken?: string;
 }
 
 /**
@@ -249,6 +294,15 @@ function setInGameSignal(inGame: boolean): void {
 
 class Client {
   private lobbyHandle: JoinLobbyResult | null = null;
+  /** The game the replay viewer is showing, once it has replaced the menu. */
+  private replayViewerID: string | null = null;
+  /**
+   * The scenario editor once it has replaced the menu: the element, or the
+   * draft it opens while its chunk loads.
+   */
+  private scenarioEditor: Pick<ScenarioEditor, "draftId"> | null = null;
+  /** A join closed the scenario editor; the menu is gone. */
+  private menuGoneForJoin = false;
   private eventBus: EventBus = new EventBus();
 
   private currentUrl: string | null = null;
@@ -257,6 +311,18 @@ class Client {
 
   private hostModal: HostPrivateLobbyModal;
   private joinModal: JoinLobbyModal;
+  private readonly gamePortal = gamePortal;
+  private activeJoinAbortController: AbortController | null = null;
+
+  private get joinLobbyModal(): JoinLobbyModal {
+    const modal = this.loadedJoinModal();
+    if (modal) return modal;
+    return {
+      closeWithoutLeaving: () => {},
+      close: () => {},
+    } as unknown as JoinLobbyModal;
+  }
+
   private gameModeSelector: GameModeSelector;
   private userSettings: UserSettings = new UserSettings();
   private storeModal: StoreModal;
@@ -265,6 +331,18 @@ class Client {
   private rewardsModal: RewardsModal;
   private steamLinkModal: SteamLinkModal;
   private steamHandoffModal: SteamHandoffModal | null = null;
+  // The Steam link modal loads on demand (see LazyModals), so it's opened
+  // through this, which loads it first.
+  private readonly steamLink: PendingLinkModal = {
+    openWithToken: async (token) => {
+      await loadModal("steam-link-modal");
+      await this.steamLinkModal?.openWithToken(token);
+    },
+    openForCodeEntry: async () => {
+      await loadModal("steam-link-modal");
+      await this.steamLinkModal?.openForCodeEntry();
+    },
+  };
   private steamHandoffDeclinedFor: string | null = null;
   private mostRecentJoinEvent: number;
   // A join the player has committed to but that has not reached a lobbyHandle
@@ -283,6 +361,26 @@ class Client {
   private presenceDetail: Omit<PresencePayload, "state"> = {};
   private presenceSpectating = false;
   private presenceInGame = false;
+  /**
+   * Whether the home page is currently torn down for a game.
+   *
+   * For listeners that may not exist when "game-starting" fires: the event
+   * carries no history, so anything registered later cannot tell "no game
+   * yet" from "a game started while I was loading". The menu audio chunk is
+   * exactly that case.
+   *
+   * Tracks the menu's state rather than just that prestart happened, because
+   * "menu-restored" is as easy to miss as "game-starting": a player who
+   * leaves the lobby in place before the chunk lands is back on a live home
+   * page, and a flag that only ever latched on would keep the theme off it.
+   *
+   * Its own flag rather than menuChromeIsTornDown(), which the replay viewer
+   * also sets without a "game-starting" to go with it. Set and cleared beside
+   * those two dispatches, so it says exactly what a listener needs to know:
+   * whether it would already have been disarmed had it been there to hear
+   * them.
+   */
+  private menuTornDown = false;
   // Held apart from presenceDetail because that object is REPLACED wholesale
   // on every lobby_info, and the token rides every one of those (once a
   // second) as well as the start message. Merged back in at emit time; see
@@ -301,6 +399,10 @@ class Client {
     // URL, so take the value while it is still the URL we were served at.
     // See PagePin.ts.
     capturePagePin();
+    document.documentElement.style.setProperty(
+      "--hud-opacity",
+      String(this.userSettings.hudOpacity()),
+    );
 
     flushReloadToast();
 
@@ -324,7 +426,34 @@ class Client {
 
     // One mixer for the page: the menu theme here and the SoundManager a game
     // creates later both route through it, so the volume sliders reach both.
-    startMenuMusic(initAudioMixer(this.userSettings));
+    // It and howler are their own chunk, so the page doesn't wait on them. A
+    // game that got there first has made the mixer already, and the menu
+    // theme has no business starting under it.
+    //
+    // gameInProgress covers the other order, where this chunk lands while a
+    // game is up but before the game client has built a mixer. startMenuMusic
+    // only disarms on the "game-starting" it can hear, so arming it in that
+    // window would leave it live under a running game, free to start the
+    // theme over the gameplay track on the next click or music-volume change.
+    // It is still called, so that its "menu-restored" listener exists and a
+    // player who leaves the lobby in place gets the theme back.
+    //
+    // The mixer check stays a skip rather than the same treatment:
+    // initAudioMixer disposes whatever is there, so calling it once a game
+    // has one would pull the mixer out from under that game.
+    Promise.all([
+      import("./sound/AudioMixer"),
+      import("./sound/MenuMusic"),
+    ]).then(
+      ([{ audioMixer, initAudioMixer }, { startMenuMusic }]) => {
+        if (audioMixer() === null) {
+          startMenuMusic(initAudioMixer(this.userSettings), {
+            gameInProgress: this.menuTornDown,
+          });
+        }
+      },
+      (err) => console.error("Menu audio failed to load:", err),
+    );
 
     // Snapshot the lapse-notice marker SYNCHRONOUSLY, before the first await.
     //
@@ -343,7 +472,7 @@ class Client {
       lapseMarker = localStorage.getItem(LAPSE_NOTICE_KEY);
     };
 
-    crazyGamesSDK.maybeInit();
+    void gamePortal.maybeInit();
 
     // Every exit from a game (win screen, in-game quit, popstate) navigates to
     // "/" and re-runs this, so announcing the menu here also covers "returned
@@ -382,8 +511,10 @@ class Client {
       tag: "player-profile-modal",
       pageId: "page-profile",
     });
+    // The canonical profile link, `/player/<id>` (see playerProfileUrl).
+    modalRouter.registerPath("profile", playerProfileRouteArgs);
     modalRouter.register("help", { tag: "help-modal", pageId: "page-help" });
-    modalRouter.register("news", { tag: "news-modal", pageId: "page-news" });
+    modalRouter.register("news", { tag: "news-modal" });
     modalRouter.register("language", {
       tag: "language-modal",
       pageId: "page-language",
@@ -417,22 +548,49 @@ class Client {
     startServerListPolling();
 
     // Prefetch turnstile token so it is available when the user joins a lobby.
-    // Desktop (Steam) has no Turnstile script and is server-side exempt, so
-    // skip it — otherwise getTurnstileToken() throws "Failed to load Turnstile
-    // script" after its load wait. Also skip on the versioned replay shells:
-    // the replay host may not be on the Turnstile site key's domain allowlist,
-    // so rendering the widget there just fails — and replays never
-    // send a token anyway (see getTurnstileToken below).
-    const turnstilePrefetch =
-      isDesktopShell() || isReplayShellHost(window.location.hostname)
-        ? null
-        : getTurnstileToken();
-    // A prefetch that fails is not an error anyone has asked about yet: the
-    // join path drops it and fetches once more (see getTurnstileToken below),
-    // and only that attempt alerts. Mark it handled here so a boot-time
-    // rejection nobody is awaiting yet does not surface as an unhandled one.
-    turnstilePrefetch?.catch(() => {});
-    this.turnstileTokenPromise = turnstilePrefetch;
+    // Steam has no Turnstile script and is server-side exempt (a
+    // provider="steam" JWT, see planJoinVerify), so skip it — otherwise
+    // getTurnstileToken() throws "Failed to load Turnstile script" after its
+    // load wait. Not every shell: the Android app has no Steam session, so the
+    // server wants a token from it like any browser. Also skip on the
+    // versioned replay shells: the replay host may not be on the Turnstile
+    // site key's domain allowlist, so rendering the widget there just fails —
+    // and replays never send a token anyway (see getTurnstileToken below).
+    // Also skip for returning accounts that already hold a valid 6h pass hint.
+    this.turnstileTokenPromise = null;
+    if (
+      !isSteamShell() &&
+      !isReplayShellHost(window.location.hostname) &&
+      !this.gamePortal.isOnGamePortal()
+    ) {
+      void userAuth()
+        .then((auth) => {
+          if (
+            auth !== false &&
+            clientAuth(auth.claims) === "account" &&
+            hasValidTurnstilePass(auth.claims.sub)
+          ) {
+            return;
+          }
+          if (
+            this.turnstileTokenPromise === null &&
+            !this.joinInFlight &&
+            this.lobbyHandle === null
+          ) {
+            const prefetch = getTurnstileToken(undefined, {
+              abortOnInteractive: true,
+            });
+            // A prefetch that fails is not an error anyone has asked about yet:
+            // the join path drops it and fetches once more (see getTurnstileToken
+            // below), and only that attempt alerts. Mark it handled here so a
+            // boot-time rejection nobody is awaiting yet does not surface as an
+            // unhandled one.
+            prefetch.catch(() => {});
+            this.turnstileTokenPromise = prefetch;
+          }
+        })
+        .catch(() => {});
+    }
 
     // Wait for components to render before setting version
     await customElements.whenDefined("mobile-nav-bar");
@@ -474,6 +632,17 @@ class Client {
 
     window.addEventListener("beforeunload", async () => {
       console.log("Browser is closing");
+      if (
+        this.replayViewerID !== null ||
+        this.scenarioEditor !== null ||
+        this.menuGoneForJoin
+      ) {
+        // Leaving the replay viewer or the scenario editor always navigates,
+        // so the same applies: nothing else clears the in-game signal they set.
+        // menuGoneForJoin: a join closed the editor and goes home without
+        // reaching a lobby, so neither the editor nor lobbyHandle is left.
+        setInGameSignal(false);
+      }
       if (this.lobbyHandle !== null) {
         // Leaving a game by navigating away (the popstate path's
         // `window.location.href = "/"`, or a desktop renderer reload) tears the
@@ -483,7 +652,7 @@ class Client {
         // forever -- no downloads, no polling -- for the rest of the session.
         setInGameSignal(false);
         this.lobbyHandle.stop(true);
-        await crazyGamesSDK.gameplayStop();
+        await gamePortal.gameplayStop();
       }
     });
 
@@ -522,8 +691,7 @@ class Client {
       // A rejected handshake (Turnstile alerts then rejects) never assigns
       // lobbyHandle, so nothing downstream clears the "lobby" presence
       // emitted at the top of the join -- friends would keep being offered a
-      // Join into a lobby the player never entered. Re-throw so the failure
-      // still surfaces exactly as it does today.
+      // Join into a lobby the player never entered.
       void this.handleJoinLobby(event).catch((error) => {
         this.resetPresenceToMenu();
         // joinInFlight has exactly the same problem: set when the join
@@ -533,8 +701,12 @@ class Client {
         // superseded cannot clear the flag its successor is relying on.
         if (joinOwnsInFlightFlag(this.mostRecentJoinEvent, event.timeStamp)) {
           this.joinInFlight = false;
+          // The join closed the scenario editor, which had replaced the
+          // menu: nothing is left on the page, so leave as a game does
+          // (back to the editor, for its test play).
+          if (this.menuGoneForJoin) exitGame();
         }
-        throw error;
+        console.warn("join-lobby failed:", error);
       });
     });
     document.addEventListener("leave-lobby", this.handleLeaveLobby.bind(this));
@@ -556,40 +728,52 @@ class Client {
       this.handleMatchmakingRequeue.bind(this),
     );
 
-    const hlpModal = document.querySelector("help-modal") as HelpModal;
-    if (!hlpModal || !(hlpModal instanceof HelpModal)) {
+    const hlpModal = document.querySelector("help-modal") as HelpModal | null;
+    if (!hlpModal) {
       console.warn("Help modal element not found");
     }
     const helpButton = document.getElementById("help-button");
     if (helpButton) {
       helpButton.addEventListener("click", () => {
-        if (hlpModal && hlpModal instanceof HelpModal) {
-          hlpModal.open();
-        }
+        loadModal("help-modal").then(
+          () => hlpModal?.open(),
+          (err) => console.error("help-modal failed to load:", err),
+        );
       });
     }
-    // Tutorial entry points (play-page card, help page): back to the play page
-    // if needed (so a username problem is visible), then a default solo game
-    // with the guide on.
-    document.addEventListener("start-tutorial", () => {
-      if (hlpModal?.isOpen()) hlpModal.close();
+    // Tutorial entry points (play-page card, help page) start the onboarding
+    // tutorial; its "Play a solo game" comes back (through ?solo_guide) for a
+    // default solo game with the guide on. Neither starts while the username
+    // can't play, so the problem stays visible.
+    const startSolo = (start: (modal: SinglePlayerModal) => Promise<void>) => {
+      // The help modal loads on demand (see LazyModals); until it has, it
+      // can't be open.
+      if (customElements.get("help-modal") && hlpModal?.isOpen()) {
+        hlpModal.close();
+      }
       if (this.usernameInput && !this.usernameInput.canPlay()) return;
-      void (
-        document.querySelector("single-player-modal") as SinglePlayerModal
-      )?.startTutorial();
-    });
+      whenModalLoaded("single-player-modal", () => {
+        // A join started while the chunk loaded: this request is stale.
+        if (this.gameUnderway()) return;
+        const modal = document.querySelector(
+          "single-player-modal",
+        ) as SinglePlayerModal | null;
+        if (modal) void start(modal);
+      });
+    };
+    document.addEventListener("start-tutorial", () =>
+      startSolo((m) => m.startTutorial()),
+    );
+    document.addEventListener("start-solo-guide", () =>
+      startSolo((m) => m.startSoloWithGuide()),
+    );
 
     this.storeModal = document.getElementById("page-item-store") as StoreModal;
-    if (!this.storeModal || !(this.storeModal instanceof StoreModal)) {
-      console.warn("Store modal element not found");
-    }
-
-    this.storeModal.refresh();
 
     window.addEventListener("showPage", (e: any) => {
       if (typeof e?.detail === "string" && e.detail === "page-play") {
         setTimeout(() => {
-          this.storeModal.refresh();
+          this.refreshStore();
         }, 50);
       }
     });
@@ -597,43 +781,74 @@ class Client {
     this.tokenLoginModal = document.querySelector(
       "token-login",
     ) as TokenLoginModal;
-    if (
-      !this.tokenLoginModal ||
-      !(this.tokenLoginModal instanceof TokenLoginModal)
-    ) {
+    if (!this.tokenLoginModal) {
       console.warn("Token login modal element not found");
     }
 
     this.matchmakingModal = document.querySelector(
       "matchmaking-modal",
     ) as MatchmakingModal;
-    if (
-      !this.matchmakingModal ||
-      !(this.matchmakingModal instanceof MatchmakingModal)
-    ) {
+    if (!this.matchmakingModal) {
       console.warn("Matchmaking modal element not found");
     }
 
     this.rewardsModal = document.querySelector("rewards-modal") as RewardsModal;
-    if (!this.rewardsModal || !(this.rewardsModal instanceof RewardsModal)) {
+    if (!this.rewardsModal) {
       console.warn("Rewards modal element not found");
     }
 
     this.steamLinkModal = document.querySelector(
       "steam-link-modal",
     ) as SteamLinkModal;
-    if (
-      !this.steamLinkModal ||
-      !(this.steamLinkModal instanceof SteamLinkModal)
-    ) {
+    if (!this.steamLinkModal) {
       console.warn("Steam link modal element not found");
     }
 
     this.steamHandoffModal = document.querySelector("steam-handoff-modal");
 
+    // Assigned before the userAuth() await below, which can take seconds (on
+    // Poki it waits on the SDK): the join-lobby listener is already live, and
+    // a lobby clicked meanwhile joined with no modal to show it.
+    // Both load on demand (see LazyModals). whenDefined resolves while a
+    // modal's module is still evaluating, so they have the bus before
+    // whatever loaded them can open them.
+    this.hostModal = document.querySelector(
+      "host-lobby-modal",
+    ) as HostPrivateLobbyModal;
+    if (!this.hostModal) {
+      console.warn("Host private lobby modal element not found");
+    } else {
+      void customElements.whenDefined("host-lobby-modal").then(() => {
+        this.hostModal.eventBus = this.eventBus;
+      });
+    }
+
+    this.joinModal = document.querySelector(
+      "join-lobby-modal",
+    ) as JoinLobbyModal;
+    if (!this.joinModal) {
+      console.warn("Join lobby modal element not found");
+    } else {
+      void customElements.whenDefined("join-lobby-modal").then(() => {
+        this.joinModal.eventBus = this.eventBus;
+      });
+    }
+
+    // The XP of games the player died in, still waiting to be scored, shown
+    // provisionally on their level until they are. Listening before the
+    // first userMeResponse below.
+    startProvisionalProgress({
+      fetchXp: (gameId) => fetchMyGameXp(gameId),
+      loadConfig: fetchProgressionConfig,
+      refreshUserMe: broadcastFreshUserMe,
+    });
+    setPurchaseAccountRefresh(broadcastFreshUserMe);
+    // Before the first userMeResponse below, which starts the first drain.
+    watchPlayPurchases();
+
     const onUserMe = async (userMeResponse: UserMeResponse | false) => {
-      if (crazyGamesSDK.isOnCrazyGames()) {
-        void updateCrazyGamesNavButton();
+      if (gamePortal.isOnGamePortal()) {
+        void updatePortalNavButton();
       } else {
         updateAccountNavButton(userMeResponse);
       }
@@ -700,7 +915,7 @@ class Client {
         // because a guest account satisfies it (POST /auth/refresh mints one
         // for any visitor). resumePendingSteamLink owns the real predicate,
         // next to the consumption it protects — see its comment.
-        if (resumePendingSteamLink(userMeResponse, this.steamLinkModal)) {
+        if (resumePendingSteamLink(userMeResponse, this.steamLink)) {
           return;
         }
 
@@ -729,6 +944,7 @@ class Client {
           window.location,
           isDesktopShell(),
           { joinInFlight: this.joinInFlight, lobbyHandle: this.lobbyHandle },
+          getDesktopUpdateState(),
         );
 
         // One interrupt per boot, chosen by the ordering in BootInterrupts —
@@ -739,29 +955,80 @@ class Client {
         const claimStore = parseClaimPromptStore(
           localStorage.getItem(CLAIM_PROMPT_KEY),
         );
+        const steamNotice = steamNoticeDue(
+          userMeResponse,
+          isSteamShell(),
+          Date.now(),
+        );
+        const paid = paidFactsOf(userMeResponse);
+        const interrupt = nextBootInterrupt({
+          cleanHomepage,
+          usernameStatus,
+          username,
+          usernameBase,
+          lapseNoticeDue: lapseShown,
+          grantWelcomeDue: steamGrantWelcomeDue(
+            grantStoreAfterDispatch,
+            userMeResponse,
+            Date.now(),
+          ),
+          grantEndedDue: steamGrantEndedDue(
+            grantStoreAfterDispatch,
+            userMeResponse,
+            Date.now(),
+          ),
+          grantStringsReady: steamGrantStringsReady(translateText),
+          giftEndingDue: giftEndingDue(
+            grantStoreAfterDispatch,
+            userMeResponse,
+            Date.now(),
+          ),
+          giftEndingStringsReady: giftEndingStringsReady(translateText),
+          renewalPushedDue: renewalPushedDueThisLaunch(userMeResponse),
+          renewalPushedStringsReady: renewalPushedStringsReady(translateText),
+          steamNotice,
+          steamNoticeStringsReady: steamNoticeStringsReady(translateText),
+          // Held rewards can't be claimed yet: on their own they'd open the
+          // popup every boot with nothing to do.
+          rewardCount: rewards.filter(isRewardClaimable).length,
+          claimPromptDue: claimPromptDue(claimStore, Date.now(), publicId),
+          claimStringsReady: claimPromptStringsReady(translateText),
+          // Not every caller's response went through the schema default.
+          reportThanksDue: reportThanksDueThisLaunch(
+            userMeResponse.pendingMessages ?? [],
+            publicId,
+          ),
+          reportThanksStringsReady: reportThanksStringsReady(translateText),
+        });
+        // Only the payer's welcome names a daily amount, so only it waits on
+        // the catalog.
+        const catalog =
+          interrupt === "grant-welcome" && paid !== null
+            ? await fetchCosmetics()
+            : null;
+        // A join or a deep link can land while the catalog loads.
+        if (
+          interrupt === "grant-welcome" &&
+          paid !== null &&
+          !bootInterruptsAllowed(
+            window.location,
+            isDesktopShell(),
+            { joinInFlight: this.joinInFlight, lobbyHandle: this.lobbyHandle },
+            getDesktopUpdateState(),
+          )
+        ) {
+          return;
+        }
         await runBootInterrupt(
-          nextBootInterrupt({
-            cleanHomepage,
-            usernameStatus,
-            username,
-            usernameBase,
-            lapseNoticeDue: lapseShown,
-            grantWelcomeDue: steamGrantWelcomeDue(
-              grantStoreAfterDispatch,
-              userMeResponse,
-              Date.now(),
-            ),
-            grantEndedDue: steamGrantEndedDue(
-              grantStoreAfterDispatch,
-              userMeResponse,
-              Date.now(),
-            ),
-            grantStringsReady: steamGrantStringsReady(translateText),
-            rewardCount: rewards.length,
-            claimPromptDue: claimPromptDue(claimStore, Date.now(), publicId),
-            claimStringsReady: claimPromptStringsReady(translateText),
-          }),
-          { claimStore, grantStore: grantStoreAfterDispatch, publicId },
+          interrupt,
+          {
+            claimStore,
+            grantStore: grantStoreAfterDispatch,
+            publicId,
+            steamNotice,
+            paid,
+            renewalPushed: renewalPushedOf(userMeResponse),
+          },
           {
             translate: translateText,
             confirm: (body, heading, confirmText) =>
@@ -776,17 +1043,39 @@ class Client {
               await showInGameAlert(body, { heading });
             },
             tierName: (tier) => translateCosmetic("subscriptions", tier),
+            dailyPlutonium: (tier) =>
+              subscriptionTier(catalog, tier)?.dailyHardCurrency ?? null,
             navigate: (hash) => {
               window.location.hash = hash;
             },
-            openRewards: () => this.rewardsModal?.openWithRewards(rewards),
+            openRewards: () => {
+              // Signed in as for trustRequiredDialog: a linked identity, or a
+              // portal sign-in (only the SDK knows that one).
+              void (async () => {
+                const signedIn =
+                  responseHasLinkedIdentity(userMeResponse) ||
+                  (gamePortal.isOnGamePortal() &&
+                    (await gamePortal.getUserProfile()) !== null);
+                whenModalLoaded("rewards-modal", () =>
+                  this.rewardsModal?.openWithRewards(rewards, signedIn),
+                );
+              })();
+            },
             storeClaimPrompt: (store) =>
               localStorage.setItem(CLAIM_PROMPT_KEY, JSON.stringify(store)),
-            storeSteamGrant: (store) =>
+            updateSteamGrant: (update) =>
               localStorage.setItem(
                 STEAM_GRANT_NOTICE_KEY,
-                JSON.stringify(store),
+                JSON.stringify(
+                  update(
+                    parseSteamGrantStore(
+                      localStorage.getItem(STEAM_GRANT_NOTICE_KEY),
+                    ),
+                  ),
+                ),
               ),
+            markNoticeSeen: (notice) => void markNoticeSeen(notice),
+            markMessageSeen: (kind) => void markMessageSeen(kind),
             now: () => Date.now(),
           },
         );
@@ -828,21 +1117,25 @@ class Client {
     });
 
     const initialAuthGeneration = authGeneration;
-    if ((await userAuth()) === false) {
+    const initialAuth = await userAuth();
+    // The player's store experiment groups, in parallel with the profile.
+    // Signed out (or on Steam) this settles at once with no request.
+    void loadExperiments().catch(() => undefined);
+    if (initialAuth === false) {
       // Not logged in: apply the signed-out profile directly.
       applyUserMe(initialAuthGeneration)(false);
     } else {
       // JWT appears valid: fetch the profile and apply it if still current.
-      getUserMe().then(applyUserMe(initialAuthGeneration));
+      void getUserMe().then(applyUserMe(initialAuthGeneration));
     }
 
-    // Re-run auth when the player signs into CrazyGames mid-session. Logout
-    // reloads the page, so only login needs handling here.
-    crazyGamesSDK.addAuthListener(() => {
+    // Re-run auth when the player signs into their portal account mid-session.
+    // Logout reloads the page, so only login needs handling here.
+    void gamePortal.addAuthListener(() => {
       invalidateUserMe();
       snapshotLapseMarker();
       const generation = authGeneration;
-      reauthAfterCrazyGamesChange().then((result) =>
+      void reauthAfterPortalChange().then((result) =>
         result === false
           ? applyUserMe(generation)(false)
           : getUserMe().then(applyUserMe(generation)),
@@ -862,30 +1155,16 @@ class Client {
       this.desktopUpdateState = state;
     });
 
-    this.hostModal = document.querySelector(
-      "host-lobby-modal",
-    ) as HostPrivateLobbyModal;
-    if (!this.hostModal || !(this.hostModal instanceof HostPrivateLobbyModal)) {
-      console.warn("Host private lobby modal element not found");
-    } else {
-      this.hostModal.eventBus = this.eventBus;
-    }
-
-    this.joinModal = document.querySelector(
-      "join-lobby-modal",
-    ) as JoinLobbyModal;
-    if (!this.joinModal || !(this.joinModal instanceof JoinLobbyModal)) {
-      console.warn("Join lobby modal element not found");
-    } else {
-      this.joinModal.eventBus = this.eventBus;
-    }
-
     // Attempt to join lobby from the current URL once the document is ready.
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", () => this.handleUrl());
     } else {
-      this.handleUrl();
+      void this.handleUrl();
     }
+
+    void shouldStartPortalTutorial().then((start) => {
+      if (start) document.dispatchEvent(new CustomEvent("start-tutorial"));
+    });
 
     // An invite accepted from outside the app is parked by the shell, because
     // it arrives before this renderer exists. Pull it now that we are alive.
@@ -909,24 +1188,71 @@ class Client {
         .catch(() => undefined);
     });
 
+    let lastHandledHref: string | null = null;
+
     const onHashUpdate = () => {
+      if (lastHandledHref === window.location.href) {
+        lastHandledHref = null;
+        return;
+      }
+      lastHandledHref = null;
+
+      if (this.replayViewerID !== null) {
+        this.leaveReplayViewer();
+        return;
+      }
+      if (this.scenarioEditor !== null) {
+        this.leaveScenarioEditor();
+        return;
+      }
+      // Checked before the join modal is closed below: closing it resets
+      // the URL, which would drop the hash before handleUrl reads it.
+      const replayViewerID = parseReplayViewerHash(window.location.hash);
+      const scenarioEditor = parseScenarioEditorHash(window.location.hash);
+      if (replayViewerID !== null || scenarioEditor !== null) {
+        // Not over a game that's running, a lobby being waited in, or a join
+        // still on its way to one: the viewer (or editor) would open on top
+        // of it. Drop the hash, so a reload goes back to the game rather than
+        // the viewer. currentUrl is only set once the game starts.
+        if (this.gameUnderway()) {
+          console.warn(
+            `${replayViewerID !== null ? "replay viewer" : "scenario editor"}: ignored, a game is running`,
+          );
+          history.replaceState(
+            null,
+            "",
+            this.currentUrl ??
+              window.location.pathname + window.location.search,
+          );
+          return;
+        }
+        if (replayViewerID !== null) void this.openReplayViewer(replayViewerID);
+        else void this.openScenarioEditor(scenarioEditor!.draft);
+        return;
+      }
       // Router-managed hash changes (#modal=...) are handled by the router
       // syncing in/out; we don't need to tear down the lobby state for them.
       if (modalRouter.isHashRouted()) {
         modalRouter.routeFromHash();
         return;
       }
+      if (modalRouter.closeCurrent()) {
+        lastHandledHref = window.location.href;
+        return;
+      }
+
+      if (this.currentUrl !== null && this.lobbyHandle !== null) return;
 
       // Reset the UI to its initial state.
-      this.joinModal?.close();
+      this.loadedJoinModal()?.close();
 
       onJoinChanged();
     };
 
     const leaveGame = () => {
-      crazyGamesSDK.gameplayStop().then(() => {
+      void gamePortal.gameplayStop().then(() => {
         // redirect to the home page
-        window.location.href = homeHref();
+        exitGame();
       });
     };
 
@@ -945,6 +1271,14 @@ class Client {
         );
       }
 
+      if (this.replayViewerID !== null) {
+        this.leaveReplayViewer();
+        return;
+      }
+      if (this.scenarioEditor !== null) {
+        this.leaveScenarioEditor();
+        return;
+      }
       if (this.currentUrl !== null && this.lobbyHandle !== null) {
         console.info("Game is active");
 
@@ -954,11 +1288,11 @@ class Client {
           // We can't block navigation on an async confirmation, so restore the
           // history entry immediately and only leave once the player confirms.
           history.pushState(null, "", this.currentUrl);
-          showInGameConfirm(translateText("help_modal.exit_confirmation")).then(
-            (isConfirmed) => {
-              if (isConfirmed) leaveGame();
-            },
-          );
+          void showInGameConfirm(
+            translateText("help_modal.exit_confirmation"),
+          ).then((isConfirmed) => {
+            if (isConfirmed) leaveGame();
+          });
           return;
         }
 
@@ -974,11 +1308,11 @@ class Client {
 
     const onJoinChanged = () => {
       if (this.lobbyHandle !== null) {
-        this.handleLeaveLobby();
+        void this.handleLeaveLobby();
       }
 
       // Attempt to join lobby
-      this.handleUrl();
+      void this.handleUrl();
     };
 
     // Handle browser navigation (back/forward) and manual hash edits.
@@ -1017,34 +1351,221 @@ class Client {
       });
   }
 
-  private async handleUrl() {
-    // Wait for modal custom elements to be defined
-    await Promise.all([
-      customElements.whenDefined("join-lobby-modal"),
-      customElements.whenDefined("host-lobby-modal"),
-    ]);
+  /**
+   * Close the menu's modals and hide its chrome, for something that
+   * replaces the menu: a game at prestart, or the replay viewer. Callers
+   * dispatch "game-starting" first, so the listeners that stay up through
+   * a lobby wait (featured stream, streams feed, menu music) stop too.
+   */
+  private closeMenu(): void {
+    [
+      "single-player-modal",
+      "game-starting-modal",
+      "game-top-bar",
+      "help-modal",
+      "user-setting",
+      // The in-game instance is addressed by id: querySelector("user-setting")
+      // above only ever reaches the page's inline one.
+      "#game-settings",
+      "troubleshooting-modal",
+      "inventory-modal",
+      "store-modal",
+      "language-modal",
+      "news-modal",
+      "account-button",
+      "leaderboard-button",
+      "token-login",
+      "steam-link-modal",
+      "steam-handoff-modal",
+      "matchmaking-modal",
+      "clan-modal",
+      "account-settings-modal",
+      "change-username-modal",
+      "subscription-modal",
+      "lang-selector",
+    ].forEach((tag) => {
+      const modal = document.querySelector(tag) as HTMLElement & {
+        close?: () => void;
+        isModalOpen?: boolean;
+      };
+      if (modal?.close) {
+        modal.close();
+      } else if (modal && "isModalOpen" in modal) {
+        modal.isModalOpen = false;
+      }
+    });
+    this.gameModeSelector.stop();
+    hideMenuChrome();
+  }
 
-    // Check if CrazyGames SDK is enabled first (no hash needed in CrazyGames)
-    if (crazyGamesSDK.isOnCrazyGames()) {
-      const lobbyId = await crazyGamesSDK.getInviteGameId();
+  /** A game or lobby is up, or a join is on its way to one. */
+  private gameUnderway(): boolean {
+    return this.lobbyHandle !== null || this.joinInFlight;
+  }
+
+  /**
+   * Replace the menu with the replay viewer. Leaving it reloads the page,
+   * like leaving a game.
+   */
+  private async openReplayViewer(gameID: string): Promise<void> {
+    // Opening the viewer fires both popstate and hashchange, and both can
+    // get here (CrazyGames awaits its SDK first). Only the first opens it.
+    if (this.replayViewerID !== null) return;
+    this.replayViewerID = gameID;
+    let ReplayViewer: typeof import("./replay/ReplayViewer").ReplayViewer;
+    try {
+      ({ ReplayViewer } = await import("./replay/ReplayViewer"));
+    } catch (err) {
+      // The viewer's chunk didn't load (a network error, or a deploy that
+      // replaced it). The menu is still up, so fall back to the client-side
+      // replay. It's a full page load, which also picks up a new deploy.
+      console.error("replay viewer failed to load:", err);
+      this.replayViewerID = null;
+      window.location.assign(classicReplayHref(gameID));
+      return;
+    }
+    // A join may have started while the chunk loaded.
+    if (this.gameUnderway()) {
+      console.warn("replay viewer: ignored, a game started");
+      this.replayViewerID = null;
+      return;
+    }
+    this.replaceMenu();
+    setInGameSignal(true);
+    const viewer = new ReplayViewer();
+    viewer.gameID = gameID;
+    document.body.appendChild(viewer);
+  }
+
+  /**
+   * The same teardown as starting a game, for a page that replaces the menu
+   * (the replay viewer, the scenario editor): the featured stream, ads and
+   * menu music stop, and the menu's modals close.
+   */
+  private replaceMenu(): void {
+    const hash = window.location.hash;
+    // Set first, as at game prestart: a menu-audio import that finishes
+    // later must not start the menu theme under the page.
+    this.menuTornDown = true;
+    document.dispatchEvent(new CustomEvent("game-starting"));
+    // A lobby modal may be open (a #join hash switched to the page): close it
+    // the way a game start does, without leaving a lobby it never joined.
+    this.loadedHostModal()?.disarmLeaveOnClose();
+    this.loadedJoinModal()?.disarmLeaveOnClose();
+    this.loadedMatchmakingModal()?.disarmLeaveOnClose();
+    this.loadedHostModal()?.closeWithoutLeaving();
+    this.loadedJoinModal()?.closeWithoutLeaving();
+    this.closeMenu();
+    // openfront-light: no <homepage-promos>, so no ad bottom rail to destroy.
+    // Closing a modal the router opened clears the hash. Put the page's
+    // back, so a reload opens it again.
+    if (window.location.hash !== hash) {
+      history.replaceState(
+        history.state,
+        "",
+        window.location.pathname + window.location.search + hash,
+      );
+    }
+  }
+
+  /**
+   * Replace the menu with the scenario editor. Leaving it reloads the page,
+   * like leaving the replay viewer.
+   */
+  private async openScenarioEditor(draft: string | null): Promise<void> {
+    // Both popstate and hashchange can get here; only the first opens it.
+    if (this.scenarioEditor !== null) return;
+    const request = { draftId: draft };
+    this.scenarioEditor = request;
+    let ScenarioEditorClass: typeof ScenarioEditor;
+    try {
+      ({ ScenarioEditor: ScenarioEditorClass } =
+        await import("./scenario/ScenarioEditor"));
+    } catch (err) {
+      console.error("scenario editor failed to load:", err);
+      if (this.scenarioEditor !== request) return;
+      this.scenarioEditor = null;
+      // Drop the hash, so opening the editor again retries the load.
+      if (parseScenarioEditorHash(window.location.hash) !== null) {
+        history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search,
+        );
+      }
+      void showInGameAlert(translateText("scenario_editor.load_failed"));
+      return;
+    }
+    // A join may have started while the chunk loaded, and dropped this
+    // request even if it has since failed.
+    if (this.scenarioEditor !== request || this.gameUnderway()) {
+      console.warn("scenario editor: ignored, a game started");
+      if (this.scenarioEditor === request) this.scenarioEditor = null;
+      return;
+    }
+    this.replaceMenu();
+    setInGameSignal(true);
+    const editor = new ScenarioEditorClass();
+    editor.draftId = draft;
+    this.scenarioEditor = editor;
+    document.body.appendChild(editor);
+  }
+
+  /**
+   * The URL changed under the editor. As for the replay viewer: another
+   * draft reloads the page, anything else goes home.
+   */
+  private leaveScenarioEditor(): void {
+    const route = parseScenarioEditorHash(window.location.hash);
+    // The second of the two events that opened it, or the hash the editor
+    // set for the draft it opened.
+    if (route !== null && route.draft === this.scenarioEditor?.draftId) return;
+    if (route !== null) {
+      window.location.reload();
+    } else {
+      window.location.href = homeHref();
+    }
+  }
+
+  /**
+   * The URL changed under the viewer (Back, or an edited hash). The menu
+   * isn't there to route it, so load the page again: another replay opens
+   * its viewer, anything else goes home, like leaving a game.
+   */
+  private leaveReplayViewer(): void {
+    const gameID = parseReplayViewerHash(window.location.hash);
+    // Opening the viewer fires both popstate and hashchange, and the first
+    // one opens it. The second still points at the open replay.
+    if (gameID === this.replayViewerID) return;
+    if (gameID !== null) {
+      window.location.reload();
+    } else {
+      window.location.href = homeHref();
+    }
+  }
+
+  private async handleUrl() {
+    // Portals carry the invite in their own URL, not our hash.
+    if (gamePortal.isOnGamePortal()) {
+      const lobbyId = await gamePortal.getInviteGameId();
       console.log("got game id", lobbyId);
       if (lobbyId && GAME_ID_REGEX.test(lobbyId)) {
         console.log("game parsed successfully");
         // Wait 2 seconds to ensure all elements are actually loaded,
         // On low end-chromebooks the join modal was not registered in time.
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        window.showPage?.("page-join-lobby");
-        this.joinModal?.open({ lobbyId });
-        console.log(`CrazyGames: joining lobby ${lobbyId} from invite param`);
+        whenModalLoaded("join-lobby-modal", () => {
+          window.showPage?.("page-join-lobby");
+          this.joinModal?.open({ lobbyId });
+        });
+        console.log(`Portal: joining lobby ${lobbyId} from invite param`);
         return;
       }
     }
-    crazyGamesSDK.isInstantMultiplayer().then((isInstant) => {
+    void gamePortal.isInstantMultiplayer().then((isInstant) => {
       if (isInstant) {
-        console.log(
-          `CrazyGames: joining instant multiplayer lobby from CrazyGames`,
-        );
-        this.hostModal.open();
+        console.log(`Portal: hosting instant multiplayer lobby`);
+        whenModalLoaded("host-lobby-modal", () => this.hostModal.open());
       }
     });
 
@@ -1066,6 +1587,19 @@ class Client {
     const decodedHash = decodeURIComponent(hash);
     const params = new URLSearchParams(decodedHash.split("?")[1] || "");
 
+    // The replay viewer takes over the page (loaded on demand).
+    const replayViewerID = parseReplayViewerHash(hash);
+    if (replayViewerID !== null) {
+      await this.openReplayViewer(replayViewerID);
+      return;
+    }
+    // So does the scenario editor.
+    const scenarioEditor = parseScenarioEditorHash(hash);
+    if (scenarioEditor !== null) {
+      await this.openScenarioEditor(scenarioEditor.draft);
+      return;
+    }
+
     // The `/c/<code>` share-link path is stashed (and stripped) by
     // consumeCreatorCodePath() at the very start of initialize(), before this
     // method is ever scheduled -- see the comment there for why that has to
@@ -1077,8 +1611,11 @@ class Client {
         strip,
         alertAndStrip,
         alert: (message: string) => showInGameAlert(message),
-        openTokenLogin: (token) => this.tokenLoginModal.openWithToken(token),
-        refreshStore: () => this.storeModal.refresh(),
+        openTokenLogin: (token) =>
+          whenModalLoaded("token-login", () =>
+            this.tokenLoginModal.openWithToken(token),
+          ),
+        refreshStore: () => this.refreshStore(),
         reload: () => window.location.reload(),
       });
       return;
@@ -1093,7 +1630,9 @@ class Client {
       }
 
       strip();
-      this.tokenLoginModal.openWithToken(token);
+      whenModalLoaded("token-login", () =>
+        this.tokenLoginModal.openWithToken(token),
+      );
       return;
     }
 
@@ -1107,7 +1646,7 @@ class Client {
       // the Steam build is on this machine. A typed code can come from a phone.
       this.userSettings.markSteamBuildSeen();
       strip();
-      void this.steamLinkModal?.openWithToken(steamLinkToken);
+      void this.steamLink.openWithToken(steamLinkToken);
       return;
     }
 
@@ -1119,7 +1658,7 @@ class Client {
     // lands on instead (see SteamLink.ts's isSteamLinkHash).
     if (isSteamLinkHash(hash)) {
       strip();
-      void this.steamLinkModal?.openForCodeEntry();
+      void this.steamLink.openForCodeEntry();
       return;
     }
 
@@ -1129,8 +1668,10 @@ class Client {
     if (isReplayShellHost(window.location.hostname)) {
       const replayGameId = window.location.pathname.slice(1);
       if (GAME_ID_REGEX.test(replayGameId)) {
-        window.showPage?.("page-join-lobby");
-        this.joinModal.open({ lobbyId: replayGameId });
+        whenModalLoaded("join-lobby-modal", () => {
+          window.showPage?.("page-join-lobby");
+          this.joinModal.open({ lobbyId: replayGameId });
+        });
         console.log(`joining replay ${replayGameId}`);
         return;
       }
@@ -1149,10 +1690,19 @@ class Client {
           ? "none"
           : steamHandoffMode(this.userSettings, window.location.search);
       if (handoff !== "none" && this.steamHandoffModal !== null) {
-        this.steamHandoffModal.offer(lobbyId, handoff, () => {
+        const modal = this.steamHandoffModal;
+        const decline = () => {
           this.steamHandoffDeclinedFor = lobbyId;
           void this.handleUrl();
-        });
+        };
+        loadModal("steam-handoff-modal").then(
+          () => modal.offer(lobbyId, handoff, decline),
+          (err) => {
+            // Join in the browser rather than leave the link doing nothing.
+            console.error("steam-handoff-modal failed to load:", err);
+            decline();
+          },
+        );
         return;
       }
       // Joining needs the API's server list (multi-server v2): the id's
@@ -1184,7 +1734,9 @@ class Client {
         // open() reveals the inline page itself (it calls showPage internally).
         // Calling showPage first would open the modal once with no args and
         // spuriously create a lobby before this attach call runs.
-        this.hostModal.open({ existingLobbyId: lobbyId });
+        whenModalLoaded("host-lobby-modal", () =>
+          this.hostModal.open({ existingLobbyId: lobbyId }),
+        );
         console.log(`reopening host lobby ${lobbyId}`);
         return;
       }
@@ -1193,9 +1745,15 @@ class Client {
       const spectate = new URLSearchParams(window.location.search).has(
         "spectate",
       );
-      window.showPage?.("page-join-lobby");
-      this.joinModal.open({ lobbyId, spectate });
+      whenModalLoaded("join-lobby-modal", () => {
+        window.showPage?.("page-join-lobby");
+        this.joinModal.open({ lobbyId, spectate });
+      });
       console.log(`${spectate ? "spectating" : "joining"} lobby ${lobbyId}`);
+      return;
+    }
+    // A shared profile link (`/player/<id>`) opens that profile.
+    if (modalRouter.routeFromPath()) {
       return;
     }
     if (modalRouter.routeFromHash()) {
@@ -1205,14 +1763,23 @@ class Client {
       const affiliateCode = decodedHash.replace("#affiliate=", "");
       strip();
       if (affiliateCode) {
-        this.storeModal?.open({ affiliateCode });
+        loadModal("store-modal").then(
+          () => this.storeModal?.open({ affiliateCode }),
+          (err) => console.error("store-modal failed to load:", err),
+        );
       }
     }
     if (decodedHash.startsWith("#refresh")) {
       window.location.href = homeHref();
     }
 
-    const requeueMode = this.consumeRequeueUrl();
+    if (this.consumeUrlFlag("solo_guide")) {
+      document.dispatchEvent(new CustomEvent("start-solo-guide"));
+    }
+
+    const requeueMode = consumeRequeueUrl(window.location, (url) =>
+      history.replaceState(null, "", url),
+    );
     if (requeueMode !== null) {
       document.dispatchEvent(
         new CustomEvent("open-matchmaking", {
@@ -1222,22 +1789,41 @@ class Client {
     }
   }
 
-  // Returns the requeue mode ("/?requeue" = 1v1, "/?requeue=2v2" = 2v2), or
-  // null when the URL has no requeue param.
-  private consumeRequeueUrl(): "1v1" | "2v2" | null {
-    const searchParams = new URLSearchParams(window.location.search);
-    if (!searchParams.has("requeue")) {
-      return null;
-    }
-    const mode = searchParams.get("requeue") === "2v2" ? "2v2" : "1v1";
+  // The lobby modals load on demand (see LazyModals); until one has, it
+  // can't be open, so there's nothing to close.
+  private loadedJoinModal(): JoinLobbyModal | null {
+    return customElements.get("join-lobby-modal") ? this.joinModal : null;
+  }
 
-    searchParams.delete("requeue");
-    const newUrl =
+  private loadedHostModal(): HostPrivateLobbyModal | null {
+    return customElements.get("host-lobby-modal") ? this.hostModal : null;
+  }
+
+  private loadedMatchmakingModal(): MatchmakingModal | null {
+    return customElements.get("matchmaking-modal")
+      ? this.matchmakingModal
+      : null;
+  }
+
+  private refreshStore(): void {
+    // The store loads on demand (see LazyModals); until it has, there's
+    // nothing to refresh.
+    if (customElements.get("store-modal")) void this.storeModal?.refresh();
+  }
+
+  // True (and drops it from the URL) when the URL carries ?<name>.
+  private consumeUrlFlag(name: string): boolean {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (!searchParams.has(name)) return false;
+    searchParams.delete(name);
+    history.replaceState(
+      null,
+      "",
       window.location.pathname +
-      (searchParams.toString() ? `?${searchParams.toString()}` : "") +
-      window.location.hash;
-    history.replaceState(null, "", newUrl);
-    return mode;
+        (searchParams.toString() ? `?${searchParams.toString()}` : "") +
+        window.location.hash,
+    );
+    return true;
   }
 
   private desktopUpdateState: DesktopUpdateState | null = null;
@@ -1284,12 +1870,13 @@ class Client {
    * do.
    */
   private blockedJoin(lobby: JoinLobbyEvent): boolean {
-    const desktop = isDesktopShell();
+    // The update half applies in every shell; the session half is the Steam
+    // sign-in, which only the Steam shell has.
     if (
       !shouldBlockJoin(
         lobby,
-        desktop ? this.desktopUpdateState : null,
-        desktop ? getDesktopSessionState() : null,
+        isDesktopShell() ? this.desktopUpdateState : null,
+        isSteamShell() ? getDesktopSessionState() : null,
       )
     ) {
       return false;
@@ -1299,18 +1886,24 @@ class Client {
     // "joined, waiting", and HostLobbyModal after the server lobby exists.
     // Refusing without closing those would leave the UI claiming a lobby the
     // client never entered, with the game starting without them.
-    this.joinModal?.close();
-    this.hostModal?.close();
+    // Disarm matchmaking before closing any sibling inline modal: BaseModal.close()
+    // calls showPage("page-play") even when already closed, which force-closes an
+    // open matchmaking modal and would emit leave-lobby for a refused join.
+    const closeMatchmaking =
+      lobby.source === "matchmaking" && this.loadedMatchmakingModal()?.isOpen();
+    if (closeMatchmaking) {
+      this.loadedMatchmakingModal()?.disarmLeaveOnClose();
+    }
+    this.loadedJoinModal()?.close();
+    this.loadedHostModal()?.close();
     // Matchmaking dispatches its own join once the server matches it, so a
     // refusal here leaves its modal sitting on "waiting for a game" over a
-    // match that will never be entered. close() is the same teardown its Back
-    // button uses -- it shuts the queue socket and clears the watchdog -- so
-    // the player leaves the queue rather than holding a slot from a screen
-    // that is lying to them. Scoped to the source that owns that modal: a
-    // deep link refused while someone is legitimately queued must not cancel
-    // their queue.
-    if (lobby.source === "matchmaking" && this.matchmakingModal?.isOpen()) {
-      this.matchmakingModal.close();
+    // match that will never be entered. closeWithoutLeaving() shuts the queue
+    // socket and clears the watchdog without emitting leave-lobby. Scoped to
+    // the source that owns that modal: a deep link refused while someone is
+    // legitimately queued must not cancel their queue.
+    if (closeMatchmaking && this.loadedMatchmakingModal()?.isOpen()) {
+      this.matchmakingModal.closeWithoutLeaving();
     }
     // false: the web never refuses here any more, so the only feedback left
     // is the desktop status bar's wiggle -- the bar is already showing the
@@ -1319,9 +1912,43 @@ class Client {
     return true;
   }
 
+  private cleanupFailedJoin(event: CustomEvent<JoinLobbyEvent>): void {
+    const ownsFlag = this.mostRecentJoinEvent === event.timeStamp;
+    if (!ownsFlag) return;
+
+    this.activeJoinAbortController?.abort();
+    this.activeJoinAbortController = null;
+    const closeMatchmaking =
+      event.detail.source === "matchmaking" &&
+      this.loadedMatchmakingModal()?.isOpen();
+    // Disarm all involved lobby modals before closing any of them so inline
+    // showPage("page-play") side effects cannot emit an extra leave-lobby.
+    this.loadedHostModal()?.disarmLeaveOnClose();
+    this.loadedJoinModal()?.disarmLeaveOnClose();
+    if (closeMatchmaking) {
+      this.loadedMatchmakingModal()?.disarmLeaveOnClose();
+    }
+    this.joinLobbyModal.closeWithoutLeaving();
+    this.loadedHostModal()?.closeWithoutLeaving();
+    if (closeMatchmaking && this.loadedMatchmakingModal()?.isOpen()) {
+      this.matchmakingModal.closeWithoutLeaving();
+    }
+    const startingModal = document.querySelector("game-starting-modal");
+    if (startingModal instanceof GameStartingModal) {
+      startingModal.hide();
+    }
+    // handleLeaveLobby only resets the URL once a lobby handle exists.
+    history.replaceState(null, "", "/");
+    document.dispatchEvent(new CustomEvent("leave-lobby"));
+  }
+
   private async handleJoinLobby(event: CustomEvent<JoinLobbyEvent>) {
     const lobby = event.detail;
     if (this.usernameInput && !this.usernameInput.canPlay()) {
+      event.preventDefault();
+      if (!this.joinInFlight && this.lobbyHandle === null) {
+        this.gameModeSelector?.releaseRefusedJoin(lobby?.gameID);
+      }
       // The singleplayer modal shows the starting overlay before dispatching
       // join-lobby; a refused join must release it or it stays over the menu.
       const startingModal = document.querySelector("game-starting-modal");
@@ -1331,12 +1958,19 @@ class Client {
       return;
     }
     if (this.blockedJoin(lobby)) {
+      event.preventDefault();
+      if (!this.joinInFlight && this.lobbyHandle === null) {
+        this.gameModeSelector?.releaseRefusedJoin(lobby?.gameID);
+      }
       return;
     }
     // Only once the join is actually going ahead: a refused dispatch that
     // bumped this would supersede a legitimate join still awaiting userAuth
     // and cosmetics, stopping it as stale and leaving the player nowhere.
     this.mostRecentJoinEvent = event.timeStamp;
+    const joinAbort = new AbortController();
+    this.activeJoinAbortController?.abort();
+    this.activeJoinAbortController = joinAbort;
     // Cleared on both ways out of the pre-handle window (superseded, or the
     // handle being assigned) and by handleLeaveLobby, which runs its reset
     // above its own lobbyHandle guard precisely because this window exists.
@@ -1379,19 +2013,58 @@ class Client {
     };
     this.emitPresence();
 
+    if (this.replayViewerID !== null) {
+      console.log("joining lobby, tearing down replay viewer");
+      this.replayViewerID = null;
+      document.querySelector("replay-viewer")?.remove();
+      if (parseReplayViewerHash(window.location.hash) !== null) {
+        history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search,
+        );
+      }
+    }
+    if (this.scenarioEditor !== null) {
+      console.log("joining lobby, tearing down scenario editor");
+      // Only the loaded editor has replaced the menu.
+      if (this.scenarioEditor instanceof HTMLElement) {
+        this.menuGoneForJoin = true;
+      }
+      this.scenarioEditor = null;
+      document.querySelector("scenario-editor")?.remove();
+      if (parseScenarioEditorHash(window.location.hash) !== null) {
+        history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search,
+        );
+      }
+    }
+
     if (this.lobbyHandle !== null) {
       console.log("joining lobby, stopping existing game");
       this.lobbyHandle.stop(true);
       setInGameSignal(false);
     }
     if (lobby.source === "public") {
-      this.joinModal?.open({
+      // Awaited so the modal opens before the join goes on to close it. A
+      // modal that won't load doesn't stop the join.
+      await loadModal("join-lobby-modal").catch((err) =>
+        console.error("join-lobby-modal failed to load:", err),
+      );
+      if (joinAbort.signal.aborted) return;
+      this.loadedJoinModal()?.open({
         lobbyId: lobby.gameID,
         lobbyInfo: lobby.publicLobbyInfo,
       });
     }
     // Only update URL immediately for private lobbies, not public ones
-    if (lobby.source !== "public") {
+    if (
+      lobby.source !== "public" &&
+      lobby.source !== "singleplayer" &&
+      !lobby.gameRecord
+    ) {
       this.updateJoinUrlForShare(lobby.gameID);
     }
     // Singleplayer runs entirely locally, and the session is only used here
@@ -1404,58 +2077,180 @@ class Client {
       void userAuth();
     }
     const auth = await userAuth(!isSingleplayer);
+    if (joinAbort.signal.aborted) return;
     const playerRole = auth !== false ? (auth.claims.role ?? null) : null;
     // Ensure the one-shot Steam name-seed has settled before reading
     // getUsername(), mirroring how getClanCheck() runs in parallel with the
     // handshake. whenSeeded() always resolves (falling back to the generated
     // anon name on failure/timeout), so this can only delay, never block.
     await this.usernameInput?.whenSeeded();
+    if (joinAbort.signal.aborted) return;
     // One resolution for the whole join: the name and the verified badge have
     // to describe the same decision, so they are read together rather than
     // asked for separately.
     const resolvedName =
       this.usernameInput?.resolvedName() ?? fallbackPlayerName();
-    const newLobbyHandle = joinLobby(this.eventBus, {
-      gameID: lobby.gameID,
-      cosmetics: await getPlayerCosmeticsRefs({
-        verified: resolvedName.verified,
-      }),
-      turnstileToken: await this.getTurnstileToken(lobby),
-      playerName: resolvedName.name,
-      playerClanTag: this.usernameInput?.getClanTag() ?? null,
-      clanTagCheck: this.usernameInput?.getClanCheck(),
-      playerRole,
-      gameStartInfo:
-        lobby.gameStartInfo ??
-        // Replays simulate from the archived record; re-apply the server's
-        // wire blanking or team games desync (see toWireGameStartInfo).
-        (lobby.gameRecord
-          ? toWireGameStartInfo(lobby.gameRecord.info)
-          : undefined),
-      gameRecord: lobby.gameRecord,
-      spectator: lobby.spectator,
-    });
-
-    if (this.mostRecentJoinEvent !== event.timeStamp) {
-      newLobbyHandle.stop(true);
-      console.warn("Join requested, but was superseded");
-      // Deliberately NOT clearing joinInFlight. Being here means a newer join
-      // has already set it, after this one did, so the flag is that join's and
-      // clearing it would re-open the boot interrupts over a lobby the player
-      // has committed to. The newer join clears it on its own exits, and if it
-      // has already finished, lobbyHandle is the guard. Same ownership rule as
-      // joinOwnsInFlightFlag, which is false by construction on this branch.
+    let joinLobby: typeof import("./ClientGameRunner").joinLobby;
+    try {
+      ({ joinLobby } = await loadGameClient());
+      if (joinAbort.signal.aborted) return;
+    } catch (err) {
+      // The game's chunk didn't load (a network error, or a deploy that
+      // replaced it). A full page load also picks up a new deploy, unless the
+      // player has since left or started another join.
+      console.error("game client failed to load:", err);
+      if (joinAbort.signal.aborted) return;
+      if (this.mostRecentJoinEvent !== event.timeStamp) return;
+      // The URL names the singleplayer game now, which no server has.
+      if (isSingleplayer) history.replaceState(null, "", "/");
+      if (claimGameClientReload()) {
+        reloadForUpdate();
+        return;
+      }
+      // Go home only once the player has read the alert. Taking the flag
+      // also stops beforeunload clearing the editor's in-game signal, so
+      // clear it here.
+      const menuGone = this.menuGoneForJoin;
+      if (menuGone) setInGameSignal(false);
+      this.menuGoneForJoin = false;
+      this.cleanupFailedJoin(event);
+      void showInGameAlert(
+        translateText("error_modal.game_client_failed"),
+      ).then(() => {
+        // Unless the player has joined another game, or opened the editor or
+        // a replay, while the alert was up.
+        if (
+          menuGone &&
+          !this.gameUnderway() &&
+          this.scenarioEditor === null &&
+          this.replayViewerID === null
+        ) {
+          exitGame();
+        }
+      });
       return;
     }
 
-    this.lobbyHandle = newLobbyHandle;
-    // From here lobbyHandle is the guard.
-    this.joinInFlight = false;
+    try {
+      const cosmetics = await getPlayerCosmeticsRefs({
+        verified: resolvedName.verified,
+      });
+      if (joinAbort.signal.aborted) return;
 
-    this.lobbyHandle.prestart.then(() => {
+      // Dismissing a managed challenge is a cancelled join: close the lobby
+      // modals without a second leave and without an error dialog.
+      const cancelJoin = () => this.cleanupFailedJoin(event);
+      const turnstileToken = await this.getTurnstileToken(
+        lobby,
+        auth,
+        joinAbort.signal,
+        cancelJoin,
+      );
+      if (joinAbort.signal.aborted) return;
+
+      if (this.mostRecentJoinEvent !== event.timeStamp) return;
+
+      const passPersistentId =
+        auth !== false &&
+        clientAuth(auth.claims) === "account" &&
+        ClientEnv.env() !== GameEnv.Dev &&
+        !isSteamShell() &&
+        joinIsGateable(lobby) &&
+        !wasAdmitted(lobby.gameID)
+          ? auth.claims.sub
+          : null;
+      const attemptPassTimestamp =
+        passPersistentId !== null
+          ? (readTurnstilePassTimestamp(passPersistentId) ?? Date.now())
+          : undefined;
+
+      const newLobbyHandle = joinLobby(this.eventBus, {
+        gameID: lobby.gameID,
+        cosmetics,
+        turnstileToken,
+        ...(passPersistentId !== null
+          ? {
+              onTurnstileTokenAdmitted: () =>
+                recordTurnstilePass(passPersistentId),
+              refreshTurnstileToken: (signal?: AbortSignal) => {
+                clearTurnstilePass(passPersistentId, attemptPassTimestamp);
+                return resolveTurnstileToken({
+                  prefetch: null,
+                  requestFresh: freshTurnstileRequester(cancelJoin),
+                  signal,
+                  forceFresh: true,
+                });
+              },
+            }
+          : {}),
+        playerName: resolvedName.name,
+        playerClanTag: this.usernameInput?.getClanTag() ?? null,
+        clanTagCheck: this.usernameInput?.getClanCheck(),
+        playerRole,
+        gameStartInfo:
+          lobby.gameStartInfo ??
+          // Replays simulate from the archived record; re-apply the server's
+          // wire blanking or team games desync (see toWireGameStartInfo).
+          (lobby.gameRecord
+            ? toWireGameStartInfo(lobby.gameRecord.info)
+            : undefined),
+        gameRecord: lobby.gameRecord,
+        snapshot: lobby.snapshot,
+        spectator: lobby.spectator,
+        creatorToken: lobby.creatorToken,
+      });
+
+      if (this.mostRecentJoinEvent !== event.timeStamp) {
+        newLobbyHandle.stop(true);
+        console.warn("Join requested, but was superseded");
+        // Deliberately NOT clearing joinInFlight. Being here means a newer join
+        // has already set it, after this one did, so the flag is that join's and
+        // clearing it would re-open the boot interrupts over a lobby the player
+        // has committed to. The newer join clears it on its own exits, and if it
+        // has already finished, lobbyHandle is the guard. Same ownership rule as
+        // joinOwnsInFlightFlag, which is false by construction on this branch.
+        return;
+      }
+
+      this.lobbyHandle = newLobbyHandle;
+      // From here lobbyHandle is the guard.
+      this.joinInFlight = false;
+      this.menuGoneForJoin = false;
+      this.activeJoinAbortController = null;
+    } catch (error) {
+      if (joinAbort.signal.aborted) return;
+      console.warn("Join failed before handle was assigned:", error);
+      const menuGone = this.menuGoneForJoin;
+      if (menuGone) setInGameSignal(false);
+      this.menuGoneForJoin = false;
+      this.cleanupFailedJoin(event);
+      if (!(error instanceof TurnstileError)) {
+        void showInGameAlert(
+          translateText("error_modal.game_client_failed"),
+        ).then(() => {
+          if (
+            menuGone &&
+            !this.gameUnderway() &&
+            this.scenarioEditor === null &&
+            this.replayViewerID === null
+          ) {
+            exitGame();
+          }
+        });
+      } else if (menuGone) {
+        exitGame();
+      }
+      return;
+    }
+
+    void this.lobbyHandle.prestart.then(() => {
       // The game is actually starting now (lobby wait is over). Let listeners that stay up
       // through the wait (e.g. the featured-stream panel) hide at this point instead of on join.
+      this.menuTornDown = true;
       document.dispatchEvent(new CustomEvent("game-starting"));
+      // Flash the tab if the player has switched away while waiting; the game
+      // runner takes over (and stops it) once the spawn phase is under way.
+      tabAttention.request("starting");
       // Earliest point the lobby is provably closed: the server has stopped
       // broadcasting lobby_info and refuses new seats, so the shell must stop
       // advertising this as joinable even though terrain is still loading.
@@ -1474,50 +2269,14 @@ class Client {
       // visible page — the other lobby modal. If that one is still armed,
       // its onClose leaves the lobby and disconnects the player mid
       // game-start (host or joiner, depending on close order).
-      this.hostModal?.disarmLeaveOnClose();
-      this.joinModal?.disarmLeaveOnClose();
-      this.hostModal?.closeWithoutLeaving();
-      this.joinModal?.closeWithoutLeaving();
-      [
-        "single-player-modal",
-        "game-starting-modal",
-        "game-top-bar",
-        "help-modal",
-        "user-setting",
-        // The in-game instance is addressed by id: querySelector("user-setting")
-        // above only ever reaches the page's inline one.
-        "#game-settings",
-        "troubleshooting-modal",
-        "inventory-modal",
-        "store-modal",
-        "language-modal",
-        "news-modal",
-        "account-button",
-        "leaderboard-button",
-        "token-login",
-        "steam-link-modal",
-        "steam-handoff-modal",
-        "matchmaking-modal",
-        "clan-modal",
-        "account-settings-modal",
-        "change-username-modal",
-        "subscription-modal",
-        "lang-selector",
-      ].forEach((tag) => {
-        const modal = document.querySelector(tag) as HTMLElement & {
-          close?: () => void;
-          isModalOpen?: boolean;
-        };
-        if (modal?.close) {
-          modal.close();
-        } else if (modal && "isModalOpen" in modal) {
-          modal.isModalOpen = false;
-        }
-      });
-      this.gameModeSelector.stop();
-      hideMenuChrome();
+      this.loadedHostModal()?.disarmLeaveOnClose();
+      this.loadedJoinModal()?.disarmLeaveOnClose();
+      this.loadedMatchmakingModal()?.disarmLeaveOnClose();
+      this.loadedHostModal()?.closeWithoutLeaving();
+      this.loadedJoinModal()?.closeWithoutLeaving();
+      this.closeMenu();
 
-      crazyGamesSDK.loadingStart();
+      gamePortal.loadingStart();
 
       // show when the game loads
       const startingModal = document.querySelector(
@@ -1528,19 +2287,23 @@ class Client {
       }
     });
 
-    this.lobbyHandle.join.then(() => {
-      this.joinModal?.closeWithoutLeaving();
+    void this.lobbyHandle.join.then(() => {
+      this.loadedJoinModal()?.closeWithoutLeaving();
       this.gameModeSelector.stop();
       incrementGamesPlayed();
 
       hideMenuChrome();
 
-      crazyGamesSDK.loadingStop();
-      crazyGamesSDK.gameplayStart();
+      gamePortal.loadingStop();
+      void gamePortal.gameplayStart();
       setInGameSignal(true);
 
       const lobbyIdHidden = !this.userSettings.lobbyIdVisibility();
-      if (isReplayShellHost(window.location.hostname)) {
+      if (
+        isReplayShellHost(window.location.hostname) ||
+        isSingleplayer ||
+        lobby.gameRecord !== undefined
+      ) {
         // Keep the canonical replay URL (replay.<domain>/<gameId>): the
         // /game/<id> shape and the #refresh trampoline only exist on the
         // game-server origin, so rewriting here would leave a URL that 404s
@@ -1652,12 +2415,11 @@ class Client {
       }
       await this.handleLeaveLobby();
     }
-    // A cold-start invite can beat the modal's own upgrade, which would make
-    // open() a silent no-op (the CrazyGames invite path waits for the same
-    // reason).
-    await customElements.whenDefined("join-lobby-modal");
-    window.showPage?.("page-join-lobby");
-    this.joinModal?.open({ lobbyId: gameId });
+    // The modal loads on demand (see LazyModals).
+    whenModalLoaded("join-lobby-modal", () => {
+      window.showPage?.("page-join-lobby");
+      this.joinModal?.open({ lobbyId: gameId });
+    });
     console.log(`joining lobby ${gameId} from desktop invite`);
   }
 
@@ -1688,6 +2450,10 @@ class Client {
   }
 
   private async handleLeaveLobby(event?: CustomEvent) {
+    const wasJoining = this.joinInFlight;
+    this.activeJoinAbortController?.abort();
+    this.activeJoinAbortController = null;
+    this.gameModeSelector?.resetJoinState();
     // Above the lobbyHandle guard on purpose. Presence goes to "lobby" when
     // the join starts, but lobbyHandle is only assigned once the handshake
     // finishes; a modal closed during that window dispatches leave-lobby and
@@ -1708,12 +2474,36 @@ class Client {
     this.mostRecentJoinEvent = performance.now();
 
     if (this.lobbyHandle === null) {
+      if (wasJoining) {
+        const canceledLobby = event?.detail?.lobby;
+        const pathname = window.location.pathname;
+        const matchesCanceledLobby =
+          typeof canceledLobby === "string"
+            ? pathname === ClientEnv.gamePath(canceledLobby) ||
+              pathname === "/streamer-mode"
+            : pathname.startsWith("/join/") || pathname === "/streamer-mode";
+        if (matchesCanceledLobby) {
+          try {
+            history.replaceState(null, "", "/");
+          } catch (e) {
+            console.warn("Failed to restore URL on leave:", e);
+          }
+        }
+      }
+      // The join closed the scenario editor, which had replaced the menu, and
+      // ended before reaching a lobby: nothing is left on the page, so leave as
+      // a game does (back to the editor, for its test play).
+      if (this.menuGoneForJoin) exitGame();
       return;
     }
     console.log("leaving lobby, cancelling game");
     this.lobbyHandle.stop(true);
     this.lobbyHandle = null;
     this.currentUrl = null;
+    const startingModal = document.querySelector("game-starting-modal");
+    if (startingModal instanceof GameStartingModal) {
+      startingModal.hide();
+    }
 
     try {
       history.replaceState(null, "", "/");
@@ -1741,10 +2531,11 @@ class Client {
       // page is live again without a navigation. MenuMusic tore its gesture
       // listeners down at prestart and needs them back, or the menu theme is
       // silent for the rest of the session.
+      this.menuTornDown = false;
       document.dispatchEvent(new CustomEvent("menu-restored"));
     }
 
-    if (this.joinModal.isOpen()) {
+    if (this.loadedJoinModal()?.isOpen()) {
       this.joinModal.close();
       if (
         event?.detail.cause === "full-lobby" ||
@@ -1762,7 +2553,7 @@ class Client {
       }
     }
 
-    crazyGamesSDK.gameplayStop();
+    void gamePortal.gameplayStop();
   }
 
   // Puts the player back into the ranked queue. From a pre-start match
@@ -1773,25 +2564,30 @@ class Client {
   // dispatch with no open modal (the player closed it mid-wait) stays a
   // no-op — don't force them back into a queue they left.
   private handleMatchmakingRequeue(
-    event: CustomEvent<{ mode?: "1v1" | "2v2" } | undefined>,
+    event: CustomEvent<{ mode?: MatchmakingMode } | undefined>,
   ) {
-    if (this.matchmakingModal?.requeue()) {
+    if (this.loadedMatchmakingModal()?.requeue()) {
       return;
     }
-    if (event.detail?.mode !== undefined) {
-      window.location.href =
-        event.detail.mode === "2v2" ? "/?requeue=2v2" : "/?requeue";
+    const mode = event.detail?.mode;
+    if (mode !== undefined) {
+      window.location.href = mode === "1v1" ? "/?requeue" : `/?requeue=${mode}`;
     }
   }
 
   private handleOpenMatchmaking(
-    event: CustomEvent<{ mode?: "1v1" | "2v2" } | undefined>,
+    event: CustomEvent<{ mode?: MatchmakingMode } | undefined>,
   ) {
     if (!this.matchmakingModal) return;
-    // Always set the mode: dispatchers without a detail (homepage button,
-    // requeue URL) mean 1v1 and must reset a lingering 2v2 selection.
-    this.matchmakingModal.mode = event.detail?.mode === "2v2" ? "2v2" : "1v1";
-    this.matchmakingModal.open();
+    whenModalLoaded("matchmaking-modal", () => {
+      // A game that started while it loaded has the screen now, and the
+      // game-start teardown couldn't close a modal that hadn't loaded.
+      if (menuChromeIsTornDown()) return;
+      // Always set the mode: dispatchers without a detail (homepage button,
+      // requeue URL) mean 1v1 and must reset a lingering selection.
+      this.matchmakingModal.mode = event.detail?.mode ?? "1v1";
+      this.matchmakingModal.open();
+    });
   }
 
   private handleKickPlayer(event: CustomEvent) {
@@ -1820,14 +2616,28 @@ class Client {
 
   private async getTurnstileToken(
     lobby: JoinLobbyEvent,
+    auth: UserAuth,
+    signal?: AbortSignal,
+    onCancel?: () => void,
   ): Promise<string | null> {
+    if (signal?.aborted) return null;
     if (
       ClientEnv.env() === GameEnv.Dev ||
-      isDesktopShell() ||
+      isSteamShell() ||
       // Single-player and replays: no server to verify a token against (and
       // on the CDN replay shells Turnstile cannot load at all). Shared with
       // the desktop gate so the exemption has one definition.
-      !joinIsGateable(lobby)
+      !joinIsGateable(lobby) ||
+      // Rejoining a game the server already let this tab into.
+      wasAdmitted(lobby.gameID)
+    ) {
+      return null;
+    }
+
+    if (
+      auth !== false &&
+      clientAuth(auth.claims) === "account" &&
+      hasValidTurnstilePass(auth.claims.sub)
     ) {
       return null;
     }
@@ -1839,25 +2649,17 @@ class Client {
 
     return resolveTurnstileToken({
       prefetch,
-      requestFresh: getTurnstileToken,
-      // Always request a new token on crazygames.
-      forceFresh: crazyGamesSDK.isOnCrazyGames(),
+      requestFresh: freshTurnstileRequester(onCancel),
+      signal: signal ?? this.activeJoinAbortController?.signal,
+      // Always request a new token on a portal.
+      forceFresh: this.gamePortal.isOnGamePortal(),
       onError: (code) =>
         void showInGameAlert(
-          translateText("error_modal.turnstile_error", { code }),
+          translateText("error_modal.turnstile_error", { code: code ?? "" }),
         ),
     });
   }
 }
-
-// Hide elements with no-crazygames class if on CrazyGames
-const hideCrazyGamesElements = () => {
-  if (crazyGamesSDK.isOnCrazyGames()) {
-    document.querySelectorAll(".no-crazygames").forEach((el) => {
-      (el as HTMLElement).style.display = "none";
-    });
-  }
-};
 
 // Initialize the client when the DOM is loaded
 const bootstrap = () => {
@@ -1879,19 +2681,19 @@ const bootstrap = () => {
   installCtrlWheelZoomBlocker();
 
   initLayout();
-  new Client().initialize();
+  void new Client().initialize();
   initNavigation();
+  prefetchGameClient();
+  prefetchModals();
 
-  // Hide elements immediately
-  hideCrazyGamesElements();
+  // Hides every .no-game-portal element on CrazyGames and Poki (styles.css).
+  if (gamePortal.isOnGamePortal()) {
+    document.documentElement.classList.add("game-portal");
+  }
 
-  // Also hide elements after a short delay to catch late-rendered components
-  setTimeout(hideCrazyGamesElements, 100);
-  setTimeout(hideCrazyGamesElements, 500);
-
-  // Populate the CrazyGames account buttons once the nav/top-bar have rendered
+  // Populate the portal account buttons once the nav/top-bar have rendered
   // (onUserMe also refreshes them after auth and on mid-session sign-in).
-  setTimeout(() => void updateCrazyGamesNavButton(), 500);
+  setTimeout(() => void updatePortalNavButton(), 500);
 };
 
 if (document.readyState === "loading") {
@@ -1900,12 +2702,40 @@ if (document.readyState === "loading") {
   bootstrap();
 }
 
-async function getTurnstileToken(): Promise<TurnstileToken> {
+// Join-time requests may show a managed challenge. onCancel runs synchronously
+// when the player dismisses it, before the rejection reaches any awaiter.
+function freshTurnstileRequester(
+  onCancel?: () => void,
+): (signal?: AbortSignal) => Promise<TurnstileToken> {
+  return (signal) =>
+    getTurnstileToken(signal, {
+      onCancel,
+      cancelLabel: translateText("common.cancel"),
+      dialogLabel: translateText("error_modal.turnstile_challenge_label"),
+    });
+}
+
+async function getTurnstileToken(
+  signal?: AbortSignal,
+  managed: {
+    abortOnInteractive?: boolean;
+    onCancel?: () => void;
+    cancelLabel?: string;
+    dialogLabel?: string;
+  } = {},
+): Promise<TurnstileToken> {
   // Wait for Turnstile script to load (handles slow connections)
   let attempts = 0;
   while (window.turnstile === undefined && attempts < 100) {
+    if (signal?.aborted) {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
     attempts++;
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
   }
 
   const turnstile = window.turnstile;
@@ -1920,6 +2750,8 @@ async function getTurnstileToken(): Promise<TurnstileToken> {
   // lives in TurnstileToken.ts.
   return requestTurnstileToken(turnstile, {
     sitekey: ClientEnv.turnstileSiteKey(),
-    container: "#turnstile-container",
+    container: document.getElementById("turnstile-container") ?? document.body,
+    signal,
+    ...managed,
   });
 }

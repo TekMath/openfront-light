@@ -1,8 +1,11 @@
 // Thin renderer wrapper over the desktop shell's presence bridge. Mirrors
 // SteamSDK.ts; all Steam-specific work lives in the Electron main process.
 //
-// This module deliberately knows NOTHING about Steam. It reports game state;
-// the shell decides what Steam and Discord make of it.
+// This module deliberately knows NOTHING about Steam beyond running only in
+// the Steam shell (see isAvailable). It reports game state; the shell decides
+// what Steam and Discord make of it.
+
+import { isSteamShell } from "./DesktopShell";
 
 export type PresenceState = "menu" | "lobby" | "game" | "spectating";
 
@@ -20,7 +23,7 @@ export interface PresencePayload {
   // outside the game (the shell publishes it as Steam's player group). Absent
   // for singleplayer and replays, which have no server game to group, and for
   // the menu. NOT the lobby id and not derived from it — see GroupToken in
-  // src/core/Schemas.ts for why those must stay separable.
+  // packages/shared/src/WireSchemas.ts for why those must stay separable.
   groupToken?: string;
 }
 
@@ -51,7 +54,12 @@ class DesktopPresence {
   // be present" instead of "call what the shell declares it supports". A shell
   // that ever exposed half the surface without bumping api would be silently
   // half-driven; this refuses it instead.
+  //
+  // Steam only, as well. shell.api is one number space shared with the
+  // Android shell, which is past 2 but has no Steam presence or invites, so
+  // the level alone would show it an Invite Friends button that does nothing.
   isAvailable(): boolean {
+    if (!isSteamShell()) return false;
     const api = bridge()?.shell?.api;
     return typeof api === "number" && api >= 2;
   }

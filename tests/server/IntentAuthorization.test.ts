@@ -1,6 +1,6 @@
+import { GameType } from "@openfront/engine-api/game/GameTypes";
+import { GameConfigPatch, Intent } from "@openfront/engine-api/Schemas";
 import { describe, expect, it } from "vitest";
-import { GameType } from "../../src/core/game/Game";
-import { GameConfig, Intent } from "../../src/core/Schemas";
 import {
   authorizeIntent,
   IntentActor,
@@ -34,7 +34,7 @@ const lobby = (over: Partial<IntentGameState> = {}): IntentGameState => ({
 });
 
 const kick: Intent = { type: "kick_player", targetClientID: cid("p2") };
-const config = (c: Partial<GameConfig>): Intent => ({
+const config = (c: GameConfigPatch): Intent => ({
   type: "update_game_config",
   config: c,
 });

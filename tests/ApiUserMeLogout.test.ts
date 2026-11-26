@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const logOut = vi.fn(async () => true);
@@ -9,6 +10,7 @@ vi.mock("../src/client/Auth", () => ({
   logOut: () => logOut(),
   userAuth: () => userAuth(),
   isSessionActive: () => true,
+  isOtherSession: () => false,
   getPlayToken: async () => "token",
   getAuthHeader: async () => "",
 }));

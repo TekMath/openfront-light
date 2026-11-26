@@ -1,7 +1,11 @@
+import type { UserMeResponse } from "@openfront/shared/ApiSchemas";
+import {
+  CloseCode,
+  CloseReason,
+  isTerminalClose,
+} from "@openfront/shared/CloseCodes";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UserMeResponse } from "../../src/core/ApiSchemas";
-import { CloseCode, CloseReason } from "../../src/core/CloseCodes";
 
 const apiMocks = vi.hoisted(() => ({
   getUserMe: vi.fn(),
@@ -80,7 +84,7 @@ vi.mock("../../src/client/Utils", () => ({
 }));
 
 import { MatchmakingModal } from "../../src/client/Matchmaking";
-import { UserSettings } from "../../src/core/game/UserSettings";
+import { UserSettings } from "../../src/client/UserSettings";
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -140,6 +144,10 @@ function userMe(
 ): UserMeResponse {
   return {
     user,
+    steamLicence: false,
+    steamLicenceSince: null,
+    noticesSeen: [],
+    pendingMessages: [],
     player: {
       publicId: "player-id",
       adfree: false,
@@ -173,7 +181,7 @@ function installClanSelection(tag: string | null) {
   return input;
 }
 
-async function openAndJoin(mode: "1v1" | "2v2") {
+async function openAndJoin(mode: "1v1" | "2v2" | "clanwars") {
   const modal = new MatchmakingModal();
   modal.mode = mode;
   modal.open();
@@ -237,6 +245,67 @@ describe("MatchmakingModal clan-aware joins", () => {
     expect(message).not.toHaveProperty("clanTag");
   });
 
+  it("queues clan wars for the selected current membership", async () => {
+    apiMocks.getUserMe.mockResolvedValue(userMe(["ALLY", "BETA"]));
+    installClanSelection("beta");
+
+    const { socket, message } = await openAndJoin("clanwars");
+
+    expect(socket.url).toContain("mode=clanwars");
+    expect(message).toEqual({
+      type: "join",
+      jwt: "play-token",
+      clanTag: "BETA",
+    });
+  });
+
+  it.each([
+    ["clanwars", { count: 5, clanCount: 2 }, true],
+    ["2v2", { count: 5 }, false],
+  ] as const)(
+    "shows how many are queued for the player's clan in %s",
+    async (mode, broadcast, showsClan) => {
+      apiMocks.getUserMe.mockResolvedValue(userMe(["ALLY"]));
+      installClanSelection("ALLY");
+      const { modal, socket } = await openAndJoin(mode);
+      document.body.appendChild(modal);
+
+      socket.onmessage!({
+        data: JSON.stringify({ type: "queue-size", ...broadcast }),
+      });
+      await modal.updateComplete;
+
+      expect(modal.textContent).toContain("matchmaking_modal.queue_size");
+      expect(
+        modal.textContent?.includes("matchmaking_modal.clan_queue_size"),
+      ).toBe(showsClan);
+      modal.remove();
+    },
+  );
+
+  it.each([null, "STALE"])(
+    "does not queue clan wars without a selected current membership (%s)",
+    async (tag) => {
+      apiMocks.getUserMe.mockResolvedValue(userMe(["ALLY"]));
+      installClanSelection(tag);
+      const messages: string[] = [];
+      const onMessage = (e: Event) =>
+        messages.push((e as CustomEvent<{ message: string }>).detail.message);
+      window.addEventListener("show-message", onMessage);
+
+      const modal = new MatchmakingModal();
+      modal.mode = "clanwars";
+      modal.open();
+      await vi.waitFor(() =>
+        expect(messages).toEqual(["matchmaking_modal.clan_required"]),
+      );
+      window.removeEventListener("show-message", onMessage);
+
+      expect(sockets).toHaveLength(0);
+      expect(modal.isOpen()).toBe(false);
+    },
+  );
+
   it("refreshes memberships and clears a stale selection on invalid_clan", async () => {
     apiMocks.getUserMe
       .mockResolvedValueOnce(userMe(["ALLY"]))
@@ -275,6 +344,25 @@ describe("MatchmakingModal clan-aware joins", () => {
     expect(modal.isOpen()).toBe(false);
     expect(apiMocks.invalidateUserMe).not.toHaveBeenCalled();
     expect(showMessage).toHaveBeenCalledOnce();
+    expect(sockets).toHaveLength(1);
+    window.removeEventListener("show-message", showMessage);
+  });
+
+  it("shows the retired-queue message without reconnecting on ModeRetired", async () => {
+    apiMocks.getUserMe.mockResolvedValue(userMe());
+    const showMessage = vi.fn();
+    window.addEventListener("show-message", showMessage);
+
+    const { modal, socket } = await openAndJoin("1v1");
+    socket.serverClose(CloseCode.ModeRetired, CloseReason.ModeRetired);
+    await vi.runAllTimersAsync();
+
+    expect(modal.isOpen()).toBe(false);
+    expect(showMessage).toHaveBeenCalledOnce();
+    const { translateText } = await import("../../src/client/Utils");
+    const shown = (showMessage.mock.calls[0][0] as CustomEvent).detail.message;
+    expect(shown).toBe(translateText(CloseReason.ModeRetired));
+    expect(shown).not.toBe(translateText("matchmaking_modal.rejected"));
     expect(sockets).toHaveLength(1);
     window.removeEventListener("show-message", showMessage);
   });
@@ -405,6 +493,66 @@ describe("MatchmakingModal identity gate", () => {
     );
     expect(sockets).toHaveLength(0);
     expect(modal.isOpen()).toBe(false);
+  });
+});
+
+describe("MatchmakingModal trust gate", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sockets.length = 0;
+    apiMocks.getUserMe.mockReset();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    installClanSelection(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function withTrust(
+    trustTier: UserMeResponse["player"]["trustTier"],
+  ): UserMeResponse {
+    const response = userMe();
+    return { ...response, player: { ...response.player, trustTier } };
+  }
+
+  function notTrusted(modal: MatchmakingModal): boolean {
+    return (modal as unknown as { notTrusted: boolean }).notTrusted;
+  }
+
+  // The service gates ranked on trust behind a flag, so the client must
+  // queue whatever the tier says and leave the decision to the 4103 close.
+  it.each(["untrusted", "trusted", null, undefined] as const)(
+    "queues an account whose tier is %s",
+    async (tier) => {
+      apiMocks.getUserMe.mockResolvedValue(withTrust(tier));
+      const modal = new MatchmakingModal();
+      modal.open();
+      await vi.waitFor(() => expect(sockets).toHaveLength(1));
+      expect(notTrusted(modal)).toBe(false);
+    },
+  );
+
+  it("stops without reconnecting when the service refuses as untrusted", async () => {
+    apiMocks.getUserMe.mockResolvedValue(withTrust("trusted"));
+    const { modal, socket } = await openAndJoin("1v1");
+    socket.serverClose(CloseCode.NotTrusted, CloseReason.NotTrusted);
+    await vi.runAllTimersAsync();
+
+    expect(modal.isOpen()).toBe(true);
+    expect(notTrusted(modal)).toBe(true);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("stops without reconnecting when the service says the mode is retired", async () => {
+    apiMocks.getUserMe.mockResolvedValue(withTrust("trusted"));
+    const { socket } = await openAndJoin("1v1");
+    socket.serverClose(CloseCode.ModeRetired, CloseReason.ModeRetired);
+    await vi.runAllTimersAsync();
+    expect(sockets).toHaveLength(1);
+    expect(isTerminalClose(CloseCode.ModeRetired)).toBe(true);
   });
 });
 
@@ -869,5 +1017,422 @@ describe("MatchmakingModal game-start alert", () => {
       modal.querySelector('[aria-label="public_lobby.notify_off"]'),
     ).not.toBeNull();
     expect(new UserSettings().lobbyStartAlerts()).toBe(true);
+  });
+
+  it("cleans up resources and closes socket on disconnectedCallback", async () => {
+    const joined = await openAndJoin("1v1");
+    modal = joined.modal;
+    document.body.append(modal);
+    await modal.updateComplete;
+
+    const closeSpy = vi.spyOn(joined.socket, "close");
+    modal.remove();
+    expect(closeSpy).toHaveBeenCalled();
+    expect(joined.socket.readyState).toBe(FakeWebSocket.CLOSED);
+  });
+});
+
+describe("MatchmakingModal Back and leave-lobby lifecycle", () => {
+  const OWN = "bfd5563a11111111111111111111111111111111";
+  const OLD = "5ccc50a722222222222222222222222222222222";
+  const realLocation = window.location;
+  let modal: MatchmakingModal | null = null;
+
+  function stubLocation(host: string, pathname = "/") {
+    const loc = {
+      protocol: "https:",
+      host,
+      hostname: host,
+      pathname,
+      search: "",
+      href: `https://${host}${pathname}`,
+    };
+    Object.defineProperty(window, "location", {
+      value: loc,
+      writable: true,
+      configurable: true,
+    });
+    return loc;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sockets.length = 0;
+    apiMocks.getUserMe.mockReset().mockResolvedValue(userMe());
+    apiMocks.invalidateUserMe.mockReset();
+    envMocks.gitCommit.mockReturnValue(OWN);
+    envMocks.gameVersion.mockReturnValue(undefined);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    stubLocation("openfront.io");
+  });
+
+  afterEach(() => {
+    modal?.close();
+    modal?.remove();
+    modal = null;
+    Object.defineProperty(window, "location", {
+      value: realLocation,
+      writable: true,
+      configurable: true,
+    });
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("emits leave-lobby when user clicks Back after join-lobby was dispatched", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ exists: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const joinEvents: CustomEvent[] = [];
+    const leaveEvents: CustomEvent[] = [];
+    const onJoin = (e: Event) => joinEvents.push(e as CustomEvent);
+    const onLeave = (e: Event) => leaveEvents.push(e as CustomEvent);
+    document.addEventListener("join-lobby", onJoin);
+    document.addEventListener("leave-lobby", onLeave);
+
+    try {
+      const joined = await openAndJoin("1v1");
+      modal = joined.modal;
+      document.body.append(modal);
+      await modal.updateComplete;
+
+      joined.socket.onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "cAbCd12345",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(joinEvents).toHaveLength(1);
+      expect(joinEvents[0].cancelable).toBe(true);
+      expect(joinEvents[0].detail).toEqual({
+        gameID: "cAbCd12345",
+        source: "matchmaking",
+      });
+
+      const backBtn = modal.querySelector<HTMLButtonElement>(
+        '[aria-label="common.back"]',
+      );
+      expect(backBtn).not.toBeNull();
+      backBtn!.click();
+
+      expect(leaveEvents).toHaveLength(1);
+      expect(leaveEvents[0].detail).toEqual({ lobby: "cAbCd12345" });
+
+      // Disconnecting afterwards must not emit a duplicate leave-lobby.
+      modal.remove();
+      expect(leaveEvents).toHaveLength(1);
+    } finally {
+      document.removeEventListener("join-lobby", onJoin);
+      document.removeEventListener("leave-lobby", onLeave);
+    }
+  });
+
+  it("aborts in-flight checkGame() on Back without navigating or dispatching join-lobby", async () => {
+    envMocks.gameVersion.mockReturnValue(OLD);
+    const loc = stubLocation("openfront.io");
+
+    let resolveFetch!: (res: Response) => void;
+    let fetchSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          fetchSignal = init?.signal ?? undefined;
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const joinEvents: CustomEvent[] = [];
+    const leaveEvents: CustomEvent[] = [];
+    const onJoin = (e: Event) => joinEvents.push(e as CustomEvent);
+    const onLeave = (e: Event) => leaveEvents.push(e as CustomEvent);
+    document.addEventListener("join-lobby", onJoin);
+    document.addEventListener("leave-lobby", onLeave);
+
+    try {
+      const joined = await openAndJoin("1v1");
+      modal = joined.modal;
+      document.body.append(modal);
+      await modal.updateComplete;
+
+      joined.socket.onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "cAbCd12345",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchSignal?.aborted).toBe(false);
+
+      modal
+        .querySelector<HTMLButtonElement>('[aria-label="common.back"]')!
+        .click();
+      expect(fetchSignal?.aborted).toBe(true);
+
+      resolveFetch(
+        new Response(JSON.stringify({ exists: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(joinEvents).toHaveLength(0);
+      expect(leaveEvents).toHaveLength(0);
+      expect(loc.href).toBe("https://openfront.io/");
+    } finally {
+      document.removeEventListener("join-lobby", onJoin);
+      document.removeEventListener("leave-lobby", onLeave);
+    }
+  });
+
+  it("does not overlap slow checkGame() polls across interval ticks", async () => {
+    let resolveFetch!: (res: Response) => void;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const joinEvents: CustomEvent[] = [];
+    const onJoin = (e: Event) => joinEvents.push(e as CustomEvent);
+    document.addEventListener("join-lobby", onJoin);
+
+    try {
+      const joined = await openAndJoin("1v1");
+      modal = joined.modal;
+      document.body.append(modal);
+      await modal.updateComplete;
+
+      joined.socket.onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "cAbCd12345",
+        }),
+      });
+
+      // Advance across multiple 1s interval ticks while the first fetch is still pending.
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(joinEvents).toHaveLength(0);
+
+      resolveFetch(
+        new Response(JSON.stringify({ exists: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(joinEvents).toHaveLength(1);
+      expect(joinEvents[0].detail).toEqual({
+        gameID: "cAbCd12345",
+        source: "matchmaking",
+      });
+    } finally {
+      document.removeEventListener("join-lobby", onJoin);
+    }
+  });
+
+  it("suppresses leave-lobby via disarmLeaveOnClose() and closeWithoutLeaving(), and re-arms on next open()", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ exists: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const leaveEvents: CustomEvent[] = [];
+    const onLeave = (e: Event) => leaveEvents.push(e as CustomEvent);
+    document.addEventListener("leave-lobby", onLeave);
+
+    try {
+      const joined = await openAndJoin("1v1");
+      modal = joined.modal;
+      document.body.append(modal);
+      await modal.updateComplete;
+
+      joined.socket.onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "cAbCd12345",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      modal.disarmLeaveOnClose();
+      modal.close();
+      expect(leaveEvents).toHaveLength(0);
+
+      // Re-opening must re-arm leaveLobbyOnClose.
+      modal.open();
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      sockets[1].open();
+      await vi.advanceTimersByTimeAsync(2000);
+      sockets[1].onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "dEfGh67890",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      modal.close();
+      expect(leaveEvents).toHaveLength(1);
+      expect(leaveEvents[0].detail).toEqual({ lobby: "dEfGh67890" });
+
+      // closeWithoutLeaving() also suppresses leave-lobby on a subsequent match.
+      modal.open();
+      await vi.waitFor(() => expect(sockets).toHaveLength(3));
+      sockets[2].open();
+      await vi.advanceTimersByTimeAsync(2000);
+      sockets[2].onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "eIjKl11111",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      modal.closeWithoutLeaving();
+      expect(leaveEvents).toHaveLength(1);
+    } finally {
+      document.removeEventListener("leave-lobby", onLeave);
+    }
+  });
+
+  it("does not emit leave-lobby on close if join-lobby was prevented", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ exists: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const prevented: boolean[] = [];
+    const preventJoin = vi.fn((e: Event) => {
+      e.preventDefault();
+      prevented.push(e.defaultPrevented);
+    });
+    const leaveEvents: CustomEvent[] = [];
+    const onLeave = (e: Event) => leaveEvents.push(e as CustomEvent);
+    document.addEventListener("join-lobby", preventJoin);
+    document.addEventListener("leave-lobby", onLeave);
+
+    try {
+      const joined = await openAndJoin("1v1");
+      modal = joined.modal;
+      document.body.append(modal);
+      await modal.updateComplete;
+
+      joined.socket.onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "cAbCd12345",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(preventJoin).toHaveBeenCalledTimes(1);
+      expect(prevented).toEqual([true]);
+
+      modal.close();
+      expect(leaveEvents).toHaveLength(0);
+    } finally {
+      document.removeEventListener("join-lobby", preventJoin);
+      document.removeEventListener("leave-lobby", onLeave);
+    }
+  });
+
+  it("aborts a stalled /exists check after its deadline so the next poll can dispatch join-lobby", async () => {
+    let firstAborted = false;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              firstAborted = true;
+              const err = new Error("Aborted");
+              err.name = "AbortError";
+              reject(err);
+            });
+          }),
+      )
+      .mockImplementationOnce(
+        async () =>
+          new Response(JSON.stringify({ exists: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const joinEvents: CustomEvent[] = [];
+    const onJoin = (e: Event) => joinEvents.push(e as CustomEvent);
+    document.addEventListener("join-lobby", onJoin);
+
+    try {
+      const joined = await openAndJoin("1v1");
+      modal = joined.modal;
+      document.body.append(modal);
+      await modal.updateComplete;
+
+      joined.socket.onmessage?.({
+        data: JSON.stringify({
+          type: "match-assignment",
+          gameId: "stalled123",
+        }),
+      });
+
+      // Tick at 1s starts the first fetch; ticks at 2s and 3s are skipped while in flight.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(firstAborted).toBe(false);
+
+      // At 4s total (3s after poll 1 started), the deadline aborts poll 1; the
+      // next interval tick at 5s sends poll 2, which succeeds and dispatches join-lobby once.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(firstAborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(joinEvents).toHaveLength(1);
+      expect(joinEvents[0].detail).toEqual({
+        gameID: "stalled123",
+        source: "matchmaking",
+      });
+    } finally {
+      document.removeEventListener("join-lobby", onJoin);
+    }
   });
 });

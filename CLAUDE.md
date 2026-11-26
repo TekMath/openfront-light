@@ -83,7 +83,7 @@ Every background call to the absent API failed and logged, on every start or eve
 
 #### 8. GitHub Actions: checks, then build and publish the light image
 
-- `.github/workflows/ci.yml` is the only pipeline. On every PR and push it runs lint, Prettier, tests, typecheck + `build-server-light`, and the generated-maps check. When they all pass, it builds `Dockerfile.light` for `linux/amd64`. It pushes to GHCR (`ghcr.io/<owner>/openfront-light`, with a registry layer cache under `:buildcache`) only when a `v*` tag is pushed: `:<tag>`, plus `:latest` for non-pre-release tags. The image's `GIT_COMMIT` is the tag name. The maps come from the `OPENFRONT_MAPS` repository variable, with the prebuilt-image selection as the default. The `image` job and its build step are named from the same condition, so a PR or `main` run reads "Build image (no publish)" / "Build image" and a `v*` tag run reads "Build and publish image" / "Build and push image".
+- `.github/workflows/ci.yml` is the only pipeline. On every PR and push it runs lint, the format check (Oxfmt since the upstream merge of entry 12; Prettier before), tests, typecheck + `build-server-light`, and the generated-maps check. When they all pass, it builds `Dockerfile.light` for `linux/amd64`. It pushes to GHCR (`ghcr.io/<owner>/openfront-light`, with a registry layer cache under `:buildcache`) only when a `v*` tag is pushed: `:<tag>`, plus `:latest` for non-pre-release tags. The image's `GIT_COMMIT` is the tag name. The maps come from the `OPENFRONT_MAPS` repository variable, with the prebuilt-image selection as the default. The `image` job and its build step are named from the same condition, so a PR or `main` run reads "Build image (no publish)" / "Build image" and a `v*` tag run reads "Build and publish image" / "Build and push image".
 - Removed upstream workflows that deploy to or automate openfront.io: `deploy.yml`, `release.yml`, `pr-gate.yml`, `issue-lifecycle-*.yml`, `pr-author.yml`, `pr-close-on-label.yml`, `pr-description.yml`, `pr-stale.yml`, `cherry-pick-milestone.yml`, `claude-code-review.yml`. The upstream-specific issue templates (`database_request`, `new-contribution-template-*`) are removed too. `scripts/pr-gate/` and `scripts/issue-lifecycle/` are kept (`tests/PrGateRules.test.ts` still covers the former).
 - `.github/PULL_REQUEST_TEMPLATE.md` and `CODEOWNERS` now describe this fork instead of upstream's approved-issue process and teams.
 
@@ -104,6 +104,22 @@ Every background call to the absent API failed and logged, on every start or eve
 
 - **Problem**: on a deployed light server, starting any game (solo or multiplayer) hung on the loading screen. The browser console showed `Failed to execute 'fetch' on 'WorkerGlobalScope': Failed to parse URL from /_assets/maps/world/manifest.<hash>.json`. The game worker is an inlined Blob worker (`?worker&inline`, `src/core/worker/WorkerClient.ts`), which has no base URL to resolve relative URLs against. Upstream always sets `CDN_BASE` to an absolute origin in production; the light server serves its own assets with an empty `CDN_BASE`, so the worker got relative URLs. `npm run dev` hid it because Vite serves the worker from a real URL in dev.
 - **Fix**: new `workerCdnBase()` in `src/core/AssetUrls.ts`; `WorkerClient` sends the page origin as the worker's `cdnBase` when `CDN_BASE` is empty. Test: `tests/AssetUrls.test.ts`.
+- **Superseded** by the upstream merge (entry 12): upstream's engine no longer fetches anything. `src/client/WorkerClient.ts` loads the map files on the page (where a relative URL resolves) and hands them to the worker in its `init` message. `workerCdnBase()` and its test are removed.
+
+#### 12. Merge of upstream `main` (November 2026)
+
+- **What**: upstream `openfrontio/OpenFrontIO` `main` (488 commits, up to "Run the release rollout once when a draft is published (#6581)") merged into the fork. Upstream split `src/core` into npm workspace packages under `packages/` (`engine-api`, `engine-lib`, `engine`, `shared`, `zbin`), moved `WorkerClient` to `src/client/`, replaced ESLint + Prettier with Oxlint + Oxfmt, replaced the Go map generator with `scripts/gen-maps/`, and moved to TypeScript 7. Every light change above was carried over; where upstream moved a file, the `openfront-light:` change moved with it.
+- **Ads and tracking (entry 2), again**: removed the new upstream ad code: the AdShield script, the RAMP hashed-email snippet and the Playwire safe-area overrides in `index.html`; `src/client/AdForensics.ts`, `GoogleTag.ts`, `HashedEmail.ts` (and `syncHashedEmail` in `Main.ts`) with their tests; the moved `tests/client/AdGatekeeper.test.ts` and `tests/client/HomepagePromos.test.ts`. Upstream's `pr-review-instructions.yml` workflow (a bot for upstream's review queue) is removed like the other PR bots (entry 8).
+- **Home screen (entry 1)**: `GameModeSelector.ts` keeps the light layout and takes upstream's new lobby lock (`inLobby` / `joiningLobbyId`, `resetJoinState`, `releaseRefusedJoin`, `menu-restored`), the lazy modals (`whenModalLoaded`) and the Steam-only session seed. Upstream's new `tests/client/GameModeSelectorLock.test.ts` drops its lobby-card cases; `tests/client/RankedTrustLock.test.ts` (the removed Ranked button) is deleted. The `ios-add-to-home-screen-banner` is gone upstream too.
+- **Win modal (entry 2)**: upstream rewrote `WinModal.ts` (player cards, XP, FFA rating, "Get the look"). `innerHtml()` keeps only the tutorial video for new players who lose, and `show()` no longer calls `loadPatternContent()`. The "Get the look" and pattern promotion suites are removed from `tests/client/WinModalCard.test.ts` and `tests/client/graphics/layers/WinModal.test.ts`.
+- **Map subset (entry 7)**: upstream now lists maps through `listedMaps` (every map but hidden ones such as the tutorial map). `EnabledMaps.enabledMapTypes()` returns the embedded listed maps, `MapPicker.ts` and the new `AtlasMap.ts` filter `listedMaps`, and `SinglePlayerModal.ts` only reads the manifests of embedded maps for its achievement count. `Dockerfile.light` copies the workspace manifests and `packages/` (and no longer `eslint.config.js` / `zbin/`).
+- **Winner replay (entry 6)**: upstream replays disputed games in a child process (`WinnerReplay.ts`) only to decide what is archived. `GameServerDeps.archiveEnabled` (false in `defaultGameServerDeps`, true in `tests/util/GameServerHarness.ts`) makes `settleWinner()` skip it. Test: `tests/server/WinnerReplaySettle.test.ts` ("skips the replay when archiveEnabled is false").
+- **Entry 11** is superseded (see there).
+- **Tests**: the new upstream suites written against the API call `setApiEnabledForTests(true)` (`AuthCosmeticScope`, `AuthPortalLogin`, `CosmeticsStaleRefresh`, `CosmeticsTierListing`, `PendingPurchase`, `StoreTracking`, `CosmeticPurchaseInPlace`, `WinModalCard`); `Experiments.test.ts` mocks `apiEnabled: () => true`. `PlayPageTopBar` drops its Streaming Now strip case. Unused `en.json` keys removed: `main.clans`, `main.inventory`, `main.leaderboard`, `mode_selector.{lobbies_unreachable,offline_lobbies,retry_lobbies,servers_unreachable}`, `public_lobby.{see_all,upcoming}`.
+- **Account / API features hidden (entries 3 and 6)**: upstream added features served by the closed-source API. They stay inert without an account; the ones still visible to a signed-out player are hidden when `apiEnabled()` is false: the solo modal's "Sign in for achievements" button and its saved games and scenario panels (`SinglePlayerModal.ts`), and the XP and FFA rating panels of the end screen (`WinModal.ts`). The in-game "save game" row already needs a linked account (`SettingsModal.canSave()`).
+- **No SEO**: `index.html` drops the canonical link, the description and Open Graph tags and the Schema.org JSON-LD (all advertising openfront.io); `resources/public/robots.txt` disallows every crawler, and the ad network's `resources/public/ads.txt` is deleted. Test: `tests/server/RenderHtml.test.ts` ("renders no SEO tags").
+- **No game-portal script gating**: upstream's inline `__onPoki` / `__onViverse` / `__loadThirdPartyScript` scripts in `index.html` (they keep third-party scripts out of the Poki and VIVERSE iframes) are removed; the CrazyGames SDK is a plain `<script async>` again. The client's own portal detection (`src/client/poki/`, `ViverseSDK.ts`) is unchanged.
+- **CI (entry 8)**: the format job runs `npm run format:check` (Oxfmt), the typecheck job runs `npm run typecheck` (root + every package), and the gen-maps job no longer sets up Go.
 
 #### Known remaining upstream behaviour
 
@@ -127,11 +143,12 @@ Know which parts you can read and change here and which ones only exist elsewher
 
 | Area                          | Path                                           |
 | ----------------------------- | ---------------------------------------------- |
-| Deterministic game simulation | `src/core/`                                    |
+| Deterministic game simulation | `packages/engine*/` (npm workspaces)           |
+| Client/server shared code     | `packages/shared/`                             |
 | Browser client (UI + WebGL)   | `src/client/`                                  |
 | Game server (lobbies, relay)  | `src/server/`                                  |
-| Binary wire format library    | `zbin/`                                        |
-| Map generator (Go)            | `map-generator/`                               |
+| Binary wire format library    | `packages/zbin/`                               |
+| Map sources and generator     | `map-generator/`, `scripts/gen-maps/`          |
 | Open assets (CC BY-SA 4.0)    | `resources/`                                   |
 | Docker image, nginx, deploy   | `Dockerfile`, `nginx.conf`, `*.sh`             |
 | CI and repo automation        | `.github/workflows/`, `scripts/`               |
@@ -144,16 +161,16 @@ Know which parts you can read and change here and which ones only exist elsewher
 
 ### Not in this repo (closed source or private; you cannot access them)
 
-| Component                     | What it does                                                                                                                                                                                                                                 | How this repo talks to it                                                                                                                                                                                  |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **API** (Cloudflare Worker)   | Auth (JWT issuing, refresh tokens, JWKS), accounts, stats, game archive, leaderboards, clans, friends, cosmetics, store/payments, server registry (instance letters, worker counts), matchmaking and ranked queues, R2 asset upload endpoint | HTTP JSON at `https://api.<DOMAIN>` (`http://localhost:8787` in dev). Schemas: `src/core/ApiSchemas.ts`, `ClanApiSchemas.ts`, `CosmeticSchemas.ts`, `StatsSchemas.ts`. Docs: `docs/API.md`, `docs/Auth.md` |
-| **Lobby coordinator**         | One Durable Object per site that merges every master's public lobbies and schedules them                                                                                                                                                     | WebSocket from `src/server/LobbyCoordinatorClient.ts`, enabled by `LOBBY_COORDINATOR=api`                                                                                                                  |
-| **Static site Worker**        | Serves the page shell from the CDN on the page host (`<subdomain>.<DOMAIN>`) under Server list v2                                                                                                                                            | `docs/MultiServer.md` ("Server list v2"), `src/server/RenderHtml.ts`, `src/core/ServerList.ts`                                                                                                             |
-| **Infra repo**                | Infra docs (e.g. `docs/lobby-coordinator.md`) and Cloudflare setup                                                                                                                                                                           | Referenced in comments only                                                                                                                                                                                |
-| **openfront-desktop**         | Steam / desktop shell (Electron-style app, runtime asset updating)                                                                                                                                                                           | `/desktop/version.json` and `/desktop/release.json` (`src/server/DesktopRelease.ts`), `src/client/Desktop*.ts`, `SteamSDK.ts`                                                                              |
-| **CDN / R2 bucket, database** | Hashed static assets, premium cosmetics (skins, patterns, flags, effects)                                                                                                                                                                    | `CDN_BASE`, `update.sh` uploads assets via the API                                                                                                                                                         |
-| **Gatekeeper** (removed)      | Former anti-bot / rate-limit / fingerprinting module                                                                                                                                                                                         | Removed in #2012 because it was not AGPL compatible. `.gitmodules` and `src/server/README.md` are leftovers. The submodule does not exist; CI checks out with `submodules: false`                          |
-| Third parties                 | Cloudflare Turnstile, Stripe, Grafana Faro, OpenTelemetry collector, CrazyGames SDK, Steam, Crowdin                                                                                                                                          | Keys and URLs come from env vars (see below)                                                                                                                                                               |
+| Component                     | What it does                                                                                                                                                                                                                                 | How this repo talks to it                                                                                                                                                                                             |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API** (Cloudflare Worker)   | Auth (JWT issuing, refresh tokens, JWKS), accounts, stats, game archive, leaderboards, clans, friends, cosmetics, store/payments, server registry (instance letters, worker counts), matchmaking and ranked queues, R2 asset upload endpoint | HTTP JSON at `https://api.<DOMAIN>` (`http://localhost:8787` in dev). Schemas: `packages/shared/src/ApiSchemas.ts`, `ClanApiSchemas.ts`, `CosmeticSchemas.ts`, `StatsSchemas.ts`. Docs: `docs/API.md`, `docs/Auth.md` |
+| **Lobby coordinator**         | One Durable Object per site that merges every master's public lobbies and schedules them                                                                                                                                                     | WebSocket from `src/server/LobbyCoordinatorClient.ts`, enabled by `LOBBY_COORDINATOR=api`                                                                                                                             |
+| **Static site Worker**        | Serves the page shell from the CDN on the page host (`<subdomain>.<DOMAIN>`) under Server list v2                                                                                                                                            | `docs/MultiServer.md` ("Server list v2"), `src/server/RenderHtml.ts`, `packages/shared/src/ServerList.ts`                                                                                                             |
+| **Infra repo**                | Infra docs (e.g. `docs/lobby-coordinator.md`) and Cloudflare setup                                                                                                                                                                           | Referenced in comments only                                                                                                                                                                                           |
+| **openfront-desktop**         | Steam / desktop shell (Electron-style app, runtime asset updating)                                                                                                                                                                           | `/desktop/version.json` and `/desktop/release.json` (`src/server/DesktopRelease.ts`), `src/client/Desktop*.ts`, `SteamSDK.ts`                                                                                         |
+| **CDN / R2 bucket, database** | Hashed static assets, premium cosmetics (skins, patterns, flags, effects)                                                                                                                                                                    | `CDN_BASE`, `update.sh` uploads assets via the API                                                                                                                                                                    |
+| **Gatekeeper** (removed)      | Former anti-bot / rate-limit / fingerprinting module                                                                                                                                                                                         | Removed in #2012 because it was not AGPL compatible. `.gitmodules` and `src/server/README.md` are leftovers. The submodule does not exist; CI checks out with `submodules: false`                                     |
+| Third parties                 | Cloudflare Turnstile, Stripe, Grafana Faro, OpenTelemetry collector, CrazyGames SDK, Steam, Crowdin                                                                                                                                          | Keys and URLs come from env vars (see below)                                                                                                                                                                          |
 
 Local dev runs **without** the API: the client falls back to `http://localhost:8787` (or `localStorage.apiHost`), and the server accepts a bare `persistentID` as the auth token instead of a JWT (`src/server/jwt.ts`; JWTs are still verified when sent). Use `npm run dev:staging` or `npm run dev:prod` to point a local client at the real staging (`api.openfront.dev`) or production (`api.openfront.io`) API.
 
@@ -161,23 +178,28 @@ Local dev runs **without** the API: the client falls back to `http://localhost:8
 
 ```
 .
+├── packages/          npm workspaces, imported as @openfront/<pkg>/<path> (paths mirror packages/<pkg>/src/)
+│   ├── engine-api/    The contract with the engine: intent/config schemas, game types, GameUpdates, worker protocol
+│   ├── engine-lib/    Engine code that also runs outside it: tile grid, rules Config, PRNG, DetMath, snapshots
+│   ├── engine/        The deterministic simulation (executions, *Impl, pathfinding, GameRunner, worker entry)
+│   ├── shared/        Client/server code that isn't simulation: wire/HTTP schemas, ZbinWire, env, asset URLs
+│   └── zbin/          Compact binary codec for zod schemas (self-contained, zod-only). See its README.md
 ├── src/
-│   ├── core/          Deterministic simulation (runs in a Web Worker). Minimal external deps (zod, zbin, a few utils).
 │   ├── client/        Browser app: Lit UI, WebGL2 renderer, input, sound, networking
 │   └── server/        Node.js game server: master + worker processes (Express + ws)
-├── zbin/              Compact binary codec for zod schemas (self-contained, zod-only). See zbin/README.md
-├── map-generator/     Go tool: PNG + info.json -> binary maps in resources/maps + src/core/game/Maps.gen.ts
+├── map-generator/     Map sources (assets/maps/<map>/{image.png,info.json}); scripts/gen-maps/ builds them
 ├── resources/         Open assets: maps, lang/*.json, images, sprites, atlases, flags, sounds, fonts,
 │                      public/ (served at site root), news.json, changelog.md, version.txt
 ├── proprietary/       All-rights-reserved assets (logos, font, sounds)
 ├── tests/             Vitest suites (+ perf/, replay/, matchmaking/ scripts)
 ├── docs/              Architecture.md, API.md, Auth.md, Maps.md, MultiServer.md, GameServerRefactor.md
-├── scripts/           buildAssetHashes.ts (post-build), pr-gate/ and issue-lifecycle/ (GitHub bots)
-├── .github/workflows/ CI, deploy, release, PR/issue automation, Claude code review
+├── scripts/           buildAssetHashes.ts (post-build), gen-maps/, pr-gate/ and issue-lifecycle/ (GitHub bots)
+├── .github/workflows/ ci.yml only (openfront-light, see changelog entry 8)
 ├── .claude/skills/    run-openfront (drive the game in headless Chromium), release (cut a patch release)
 ├── index.html         App shell template (EJS placeholders filled by src/server/RenderHtml.ts)
 ├── vite.config.ts     Build + dev server (port 9000) + dev proxies + Vitest config
-├── Dockerfile         Multi-stage image: nginx + supervisord + node server
+├── Dockerfile         Upstream multi-stage image: nginx + supervisord + node server
+├── Dockerfile.light   openfront-light single-port image (changelog entry 7)
 ├── nginx.conf         In-container routing: master :3000, workers :3001+N via /wN/
 └── build.sh / deploy.sh / build-deploy.sh / update.sh / setup.sh   Build, ship and host provisioning
 ```
@@ -186,51 +208,53 @@ There is a nested `src/client/render/CLAUDE.md` with detailed renderer guidance.
 
 ## Where each kind of feature lives
 
-| If you are working on...                                          | Look in                                                                                                                                                                                                                            |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A new player action (intent)                                      | Schema in `src/core/Schemas.ts` → execution in `src/core/execution/` → wiring in `src/core/execution/ExecutionManager.ts` → client sender (`src/client/Transport.ts`) → server authorization (`src/server/IntentAuthorization.ts`) |
-| Game rules, balance numbers, costs, timings                       | `src/core/configuration/Config.ts`                                                                                                                                                                                                 |
-| Simulation orchestrator (turn in, tick, updates out)              | `src/core/GameRunner.ts`                                                                                                                                                                                                           |
-| Game state model (players, units, tiles, alliances)               | `src/core/game/` (`Game.ts` interfaces, `GameImpl.ts`, `PlayerImpl.ts`, `UnitImpl.ts`, `AllianceImpl.ts`, `RailNetwork*.ts`)                                                                                                       |
-| Attacks, boats, nukes, SAMs, warships, trade, trains              | `src/core/execution/*Execution.ts`                                                                                                                                                                                                 |
-| Alliances                                                         | `src/core/execution/alliance/`, `src/core/game/Alliance*Impl.ts`                                                                                                                                                                   |
-| AI nations and tribes (bots)                                      | `src/core/execution/NationExecution.ts`, `src/core/execution/nation/`, `TribeExecution.ts`, `TribeSpawner.ts`, `src/core/game/NationCreation.ts`                                                                                   |
-| Pathfinding (land, water, rail, air)                              | `src/core/pathfinding/`                                                                                                                                                                                                            |
-| Game updates sent from core to client                             | `src/core/game/GameUpdates.ts`, `GameUpdateUtils.ts`                                                                                                                                                                               |
-| Save / snapshot / rejoin state                                    | `src/core/snapshot/` (see its `README.md`)                                                                                                                                                                                         |
-| Worker thread plumbing                                            | `src/core/worker/`, `src/core/WorkerSchemas.ts`                                                                                                                                                                                    |
-| Deterministic math and RNG                                        | `src/core/DetMath.ts`, `src/core/PseudoRandom.ts`                                                                                                                                                                                  |
-| Wire messages (WebSocket)                                         | `src/core/Schemas.ts` + `src/core/ZbinWire.ts` (built on `zbin/`)                                                                                                                                                                  |
-| Maps (add or edit)                                                | `map-generator/assets/maps/<map>/{image.png,info.json}`, then `npm run gen-maps`. Never hand-edit `src/core/game/Maps.gen.ts` or `resources/maps/`                                                                                 |
-| Client entry point, boot, routing between pages                   | `src/client/Main.ts`, `ModalRouter.ts`, `Navigation.ts`, `Layout.ts`, `BootInterrupts.ts`                                                                                                                                          |
-| Running a game on the client                                      | `src/client/ClientGameRunner.ts`, `src/client/view/` (client-side mirror of game state: `GameView`, `PlayerView`, `UnitView`)                                                                                                      |
-| Map rendering (WebGL2 passes, shaders, themes)                    | `src/client/render/` (`gl/passes/`, `gl/shaders/*.glsl`, `gl/render-settings.json`, `gl/*-theme.json`)                                                                                                                             |
-| In-game HUD (sidebars, radial menu, build menu, chat, win modal)  | `src/client/hud/layers/`                                                                                                                                                                                                           |
-| Input, camera, hover and selection logic                          | `src/client/InputHandler.ts`, `TransformHandler.ts`, `src/client/controllers/`                                                                                                                                                     |
-| Menu pages and modals (lobby, account, store, clans, leaderboard) | `src/client/*Modal.ts`, `src/client/components/` (Lit components; `baseComponents/`, `clan/`, `leaderboard/`, `map/`, `ui/`)                                                                                                       |
-| Styling                                                           | Tailwind CSS 4 in Lit components, `src/client/styles/`, `src/client/styles.css`, `src/client/theme/`                                                                                                                               |
-| Sound and music                                                   | `src/client/sound/`                                                                                                                                                                                                                |
-| Auth, API calls from the client                                   | `src/client/Auth.ts`, `Api.ts`, `ApiBase.ts`, `ClanApi.ts`, `FriendsApi.ts`                                                                                                                                                        |
-| Cosmetics, store, payments, subscriptions                         | `src/client/Cosmetics.ts`, `Store.ts`, `Payments.ts`, `StripeInline.ts`, `SubscriptionModal.ts`, `src/core/CosmeticSchemas.ts`                                                                                                     |
-| Matchmaking and ranked                                            | `src/client/Matchmaking.ts`, `components/RankedModal.ts`, `src/server/RankedCheckin.ts`, `PoolRouting.ts`                                                                                                                          |
-| Desktop / Steam / CrazyGames platform integrations                | `src/client/Desktop*.ts`, `Steam*.ts`, `CrazyGames*.ts`, `ClientPlatform.ts`, `src/server/DesktopRelease.ts`                                                                                                                       |
-| Ads                                                               | `src/client/AdGatekeeper.ts`, `Admiral.ts`, `HomepagePromos.ts`, `hud/layers/InGamePromo.ts`                                                                                                                                       |
-| Server process model and HTTP routes                              | `src/server/Server.ts` (entry), `Master.ts` (port 3000, lobbies, app shell), `Worker.ts` (ports 3001+N, games)                                                                                                                     |
-| Per-game server logic (turns, clients, desync, rejoin)            | `src/server/GameServer.ts`, `GameManager.ts`, `Client.ts`, `Roster.ts`, `Rejoin.ts`, `DesyncDetector.ts`, `Consensus.ts`                                                                                                           |
-| Public lobbies and map rotation                                   | `src/server/MasterLobbyService.ts`, `WorkerLobbyService.ts`, `MapPlaylist.ts`, `LobbyCoordinatorClient.ts`                                                                                                                         |
-| Admin bot HTTP API                                                | `src/server/AdminBotRoutes.ts`                                                                                                                                                                                                     |
-| Multi-server identity and routing                                 | `src/server/ServerEnv.ts`, `ClusterCheckin.ts`, `src/core/ClusterConfig.ts`, `src/core/ServerList.ts`, `src/client/ServerList.ts`, `docs/MultiServer.md`                                                                           |
-| Server-side HTML and asset manifest                               | `src/server/RenderHtml.ts`, `PublicAssetManifest.ts`, `RuntimeAssetManifest.ts`, `src/core/AssetUrls.ts`                                                                                                                           |
-| Name / chat moderation                                            | `src/server/Censor.ts`, `NameVisibility.ts`, `src/core/validations/username.ts`                                                                                                                                                    |
-| Server logging, metrics, match telemetry                          | `src/server/Logger.ts`, `OtelResource.ts`, `WorkerMetrics.ts`, `src/server/telemetry/`                                                                                                                                             |
-| Client telemetry                                                  | `src/client/Telemetry.ts`, `GameMetrics.ts` (Grafana Faro)                                                                                                                                                                         |
-| UI text                                                           | `resources/lang/en.json` + `translateText()`                                                                                                                                                                                       |
+| If you are working on...                                          | Look in                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A new player action (intent)                                      | Schema in `packages/engine-api/src/Schemas.ts` → execution in `packages/engine/src/execution/` → wiring in `packages/engine/src/execution/ExecutionManager.ts` → client sender (`src/client/Transport.ts`) → server authorization (`src/server/IntentAuthorization.ts`) |
+| Game rules, balance numbers, costs, timings                       | `packages/engine-lib/src/configuration/Config.ts`                                                                                                                                                                                                                       |
+| Simulation orchestrator (turn in, tick, updates out)              | `packages/engine/src/GameRunner.ts`                                                                                                                                                                                                                                     |
+| Game state model (players, units, tiles, alliances)               | `packages/engine/src/game/` (`Game.ts` interfaces, `GameImpl.ts`, `PlayerImpl.ts`, `UnitImpl.ts`, `AllianceImpl.ts`, `RailNetwork*.ts`)                                                                                                                                 |
+| Attacks, boats, nukes, SAMs, warships, trade, trains              | `packages/engine/src/execution/*Execution.ts`                                                                                                                                                                                                                           |
+| Alliances                                                         | `packages/engine/src/execution/alliance/`, `packages/engine/src/game/Alliance*Impl.ts`                                                                                                                                                                                  |
+| AI nations and tribes (bots)                                      | `packages/engine/src/execution/NationExecution.ts`, `execution/nation/`, `TribeExecution.ts`, `TribeSpawner.ts`, `game/NationCreation.ts`                                                                                                                               |
+| Pathfinding (land, water, rail, air)                              | `packages/engine/src/pathfinding/`                                                                                                                                                                                                                                      |
+| Game updates sent from core to client                             | `packages/engine-api/src/game/GameUpdates.ts`                                                                                                                                                                                                                           |
+| Save / snapshot / rejoin state                                    | `packages/engine/src/snapshot/`, `packages/engine-lib/src/snapshot/`                                                                                                                                                                                                    |
+| Worker thread plumbing                                            | `packages/engine/src/worker/`, `packages/engine-api/src/worker/`, `src/client/WorkerClient.ts`                                                                                                                                                                          |
+| Deterministic math and RNG                                        | `packages/engine-lib/src/DetMath.ts`, `PseudoRandom.ts`                                                                                                                                                                                                                 |
+| Wire messages (WebSocket)                                         | `packages/shared/src/WireSchemas.ts` + `ZbinWire.ts` (built on `packages/zbin/`)                                                                                                                                                                                        |
+| Maps (add or edit)                                                | `map-generator/assets/maps/<map>/{image.png,info.json}`, then `npm run gen-maps`. Never hand-edit `packages/engine-api/src/game/Maps.gen.ts` or `resources/maps/`                                                                                                       |
+| Client entry point, boot, routing between pages                   | `src/client/Main.ts`, `ModalRouter.ts`, `Navigation.ts`, `Layout.ts`, `BootInterrupts.ts`                                                                                                                                                                               |
+| Running a game on the client                                      | `src/client/ClientGameRunner.ts`, `src/client/view/` (client-side mirror of game state: `GameView`, `PlayerView`, `UnitView`)                                                                                                                                           |
+| Map rendering (WebGL2 passes, shaders, themes)                    | `src/client/render/` (`gl/passes/`, `gl/shaders/*.glsl`, `gl/render-settings.json`, `gl/*-theme.json`)                                                                                                                                                                  |
+| In-game HUD (sidebars, radial menu, build menu, chat, win modal)  | `src/client/hud/layers/`                                                                                                                                                                                                                                                |
+| Input, camera, hover and selection logic                          | `src/client/InputHandler.ts`, `TransformHandler.ts`, `src/client/controllers/`                                                                                                                                                                                          |
+| Menu pages and modals (lobby, account, store, clans, leaderboard) | `src/client/*Modal.ts`, `src/client/components/` (Lit components; `baseComponents/`, `clan/`, `leaderboard/`, `map/`, `ui/`)                                                                                                                                            |
+| Styling                                                           | Tailwind CSS 4 in Lit components, `src/client/styles/`, `src/client/styles.css`, `src/client/theme/`                                                                                                                                                                    |
+| Sound and music                                                   | `src/client/sound/`                                                                                                                                                                                                                                                     |
+| Auth, API calls from the client                                   | `src/client/Auth.ts`, `Api.ts`, `ApiBase.ts`, `ClanApi.ts`, `FriendsApi.ts`                                                                                                                                                                                             |
+| Cosmetics, store, payments, subscriptions                         | `src/client/Cosmetics.ts`, `Store.ts`, `Payments.ts`, `StripeInline.ts`, `SubscriptionModal.ts`, `packages/shared/src/CosmeticSchemas.ts`                                                                                                                               |
+| Matchmaking and ranked                                            | `src/client/Matchmaking.ts`, `components/RankedModal.ts`, `src/server/RankedCheckin.ts`, `PoolRouting.ts`                                                                                                                                                               |
+| Desktop / Steam / CrazyGames platform integrations                | `src/client/Desktop*.ts`, `Steam*.ts`, `CrazyGames*.ts`, `ClientPlatform.ts`, `src/server/DesktopRelease.ts`                                                                                                                                                            |
+| Ads                                                               | Removed in openfront-light (changelog entries 2 and 12)                                                                                                                                                                                                                 |
+| Server process model and HTTP routes                              | `src/server/Server.ts` (entry), `Master.ts` (port 3000, lobbies, app shell), `Worker.ts` (ports 3001+N, games)                                                                                                                                                          |
+| Per-game server logic (turns, clients, desync, rejoin)            | `src/server/GameServer.ts`, `GameManager.ts`, `Client.ts`, `Roster.ts`, `Rejoin.ts`, `DesyncDetector.ts`, `Consensus.ts`                                                                                                                                                |
+| Public lobbies and map rotation                                   | `src/server/MasterLobbyService.ts`, `WorkerLobbyService.ts`, `MapPlaylist.ts`, `LobbyCoordinatorClient.ts`                                                                                                                                                              |
+| Admin bot HTTP API                                                | `src/server/AdminBotRoutes.ts`                                                                                                                                                                                                                                          |
+| Multi-server identity and routing                                 | `src/server/ServerEnv.ts`, `ClusterCheckin.ts`, `packages/shared/src/ClusterConfig.ts`, `packages/shared/src/ServerList.ts`, `src/client/ServerList.ts`, `docs/MultiServer.md`                                                                                          |
+| Server-side HTML and asset manifest                               | `src/server/RenderHtml.ts`, `PublicAssetManifest.ts`, `RuntimeAssetManifest.ts`, `packages/shared/src/AssetUrls.ts`                                                                                                                                                     |
+| Name / chat moderation                                            | `src/server/Censor.ts`, `NameVisibility.ts`                                                                                                                                                                                                                             |
+| Server logging, metrics, match telemetry                          | `src/server/Logger.ts`, `OtelResource.ts`, `WorkerMetrics.ts`, `src/server/telemetry/`                                                                                                                                                                                  |
+| Client telemetry                                                  | `src/client/Telemetry.ts`, `GameMetrics.ts` (Grafana Faro)                                                                                                                                                                                                              |
+| UI text                                                           | `resources/lang/en.json` + `translateText()`                                                                                                                                                                                                                            |
 
 ## Architecture
 
 ### Components
 
-1. **`src/core/`**: the deterministic simulation. Pure TypeScript with **minimal external runtime dependencies**: zod and `zbin`, plus `jose` (only `base64url`, in `Base64.ts` / `CosmeticSchemas.ts`) and `nanoid` / `dompurify` (in `Util.ts`). Do not add new ones. It must stay fully deterministic: seeded PRNG (`PseudoRandom`), integer / fixed-point math (`DetMath`), no `Math.random()`, no `Date.now()`, no iteration over unordered state that could differ between clients. It runs in a Web Worker on each client. **Every change to `src/core` must include tests.**
+1. **The engine** (`packages/engine-api`, `engine-lib`, `engine`): the deterministic simulation. Pure TypeScript with **no external dependencies** beyond zod (and `zbin`). It must stay bit-identical on every client: seeded PRNG, `packages/engine-lib/src/DetMath.ts` instead of `Math.exp` / `log` / `pow` / `sin` / ... or `**` with an exponent other than 2 (Oxlint enforces this), no `Math.random()`, no `Date.now()`, no host APIs beyond `console`, `performance` and `TextEncoder` / `TextDecoder`, and no fetching: the engine's host passes it the map files in `init`. It runs in a Web Worker on each client. **Every change to the engine packages must include tests.**
+   - Import graph (enforced by `tests/LayerBoundaries.test.ts`): `engine-api` imports only zod, `zbin` and `resources/*.json`; `engine-lib` adds `engine-api`; `engine` adds `engine-lib`. None of them may import `shared`, `src/client` or `src/server`. `shared` may import `engine-api` and `engine-lib`, never `engine`. `src/client` and `src/server` import `engine-api`, `engine-lib` and `shared`; the client loads `engine` only through `packages/engine/src/worker/Worker.worker.ts`, the server only through `packages/engine/src/WinnerReplay.ts`.
+   - The homepage (`src/client/Main.ts` and its static imports) never statically imports the game client (`ClientGameRunner`, `Transport`, `hud/`, `render/`, `view/`, ...): it is a separate chunk loaded through `GameClientLoader`. Modals listed in `LazyModals.ts` are loaded on demand: open one with `whenModalLoaded(tag, open)` and import its class with `import type` only.
 2. **`src/client/`**: Lit web components + Tailwind CSS 4 for the UI, a custom **WebGL2 renderer** for the map (`src/client/render/`, no Pixi.js), Howler.js for audio, and WebSocket communication.
 3. **`src/server/`**: Node.js, Express 5 and `ws`. It coordinates lobbies and relays intents. It never runs the simulation for gameplay.
 4. **API**: the closed-source Cloudflare Worker described above.
@@ -250,7 +274,7 @@ Clients send state hashes. The server detects desyncs (`DesyncDetector.ts`), so 
 
 ### Wire format
 
-Intents and every wire message are Zod schemas in `src/core/Schemas.ts`. Every WebSocket frame uses the compact binary encoding in `src/core/ZbinWire.ts` (library: `zbin/`, docs: `zbin/README.md`). HTTP stays JSON. Changing a schema changes the wire format, so keep client and server in lockstep and check replay compatibility (`src/client/VersionedReplay.ts`).
+Intents are Zod schemas in `packages/engine-api/src/Schemas.ts`; client/server messages and game records are in `packages/shared/src/WireSchemas.ts`. Every WebSocket frame uses the compact binary encoding in `packages/shared/src/ZbinWire.ts` (library: `packages/zbin/`, docs: `packages/zbin/README.md`). HTTP stays JSON. Changing a schema changes the wire format, so keep client and server in lockstep and check replay compatibility (`src/client/VersionedReplay.ts`).
 
 ### Server process model
 
@@ -271,7 +295,6 @@ The game server only renders `index.html` and serves the WebSocket and game APIs
 ### Prerequisites
 
 - Node.js `>=24.15.0 <25` and npm `>=12.1.0 <13` (enforced by `engine-strict`). If Node ships an older npm: `npm install --global --ignore-scripts npm@12.1.0`.
-- Go (version in `map-generator/go.mod`), only needed for `npm run gen-maps`.
 
 ### Install
 
@@ -292,15 +315,17 @@ npm run start:client     # Vite only
 npm run start:server-dev # Server only, with dev-safe env (GAME_ENV=dev, dummy keys, DOMAIN=localhost)
 npm run start:server     # Server with the real env (used in the container)
 npm run build-dev        # tsc --noEmit + vite build --mode development
+npm run typecheck        # tsc for the root project and each package (what CI runs)
 npm run build-prod       # tsc --noEmit + vite build + scripts/buildAssetHashes.ts (output in static/)
 npm run tunnel           # build-prod then start:server
 
-npm test              # vitest run && vitest run tests/server
+npm test              # Every Vitest project (client, client-forks, node)
+npm run test:changed  # Only tests affected by changes since origin/main
 npm run test:coverage # Tests with coverage (what CI runs)
-npm run lint          # Oxlint + ESLint
-npm run lint:fix      # Oxlint + ESLint with auto-fix
-npm run format        # Prettier (CI runs `npx prettier --check .`)
-npm run gen-maps      # Regenerate maps with the Go map-generator, then format (CI fails if the output is stale)
+npm run lint          # Oxlint
+npm run lint:fix      # Oxlint with auto-fix
+npm run format        # Oxfmt (CI runs `npm run format:check`)
+npm run gen-maps      # Regenerate maps (scripts/gen-maps), then format (CI fails if the output is stale)
 
 npm run perf             # Perf suites (tests/perf/); also perf:game, perf:client, perf:client-mem, perf:client-tick
 npm run replay:game      # Replay a recorded game (tests/replay/)
@@ -326,7 +351,7 @@ Local dev needs **no `.env` file**: `npm run dev` / `start:server-dev` inject sa
 
 | Variable                                             | Required                | Purpose                                                                                              |
 | ---------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
-| `GAME_ENV`                                           | yes                     | `dev`, `staging` (preprod) or `prod` (`parseGameEnv` in `src/core/configuration/Config.ts`)          |
+| `GAME_ENV`                                           | yes                     | `dev`, `staging` (preprod) or `prod` (`packages/shared/src/configuration/Env.ts`)                    |
 | `DOMAIN`                                             | yes                     | JWT audience and page domain. The API is `api.<DOMAIN>`, or `localhost:8787` when `DOMAIN=localhost` |
 | `GIT_COMMIT`                                         | yes                     | Build version (baked into the Docker image, `DEV` locally)                                           |
 | `TURNSTILE_SITE_KEY`                                 | yes                     | Cloudflare Turnstile site key (dev uses the test key `1x00000000000000000000AA`)                     |
@@ -364,7 +389,7 @@ In the browser, config comes from `window.BOOTSTRAP_CONFIG`, injected into `inde
 
 ### Docker image (`Dockerfile`)
 
-Multi-stage on `node:24-slim`: `npm ci`, then `npm run build-prod` (outputs `static/`), then prod-only `node_modules`. The final image runs **supervisord** with **nginx** (port 80, routes to the master and workers) and **node** (`npm run start:server`). `resources/maps` is stripped from the image because the server never reads maps. `GIT_COMMIT` is a build arg.
+Upstream's image, kept unchanged. Multi-stage on `node:24-slim`: `npm ci` (with the `packages/*` workspace manifests), then `npm run build-prod` (outputs `static/`), then prod-only `node_modules`. The final image runs **supervisord** with **nginx** (port 80, routes to the master and workers) and **node** (`npm run start:server`). `resources/maps` is stripped from the image because the server never reads maps. `GIT_COMMIT` is a build arg.
 
 ### Scripts
 
@@ -380,7 +405,7 @@ Some shell blocks are delimited with `BEGIN ... (tested)` / `END` markers and ex
 
 openfront-light keeps a single workflow (see changelog entry 8):
 
-- `ci.yml`: lint (`lint:github`), Prettier check, tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). The same tag creates a GitHub release with the prebuilt tarball (`openfront-light-<tag>.tar.gz` + `.sha256`, changelog entry 9). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
+- `ci.yml`: lint (`lint:github`), format check (Oxfmt), tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). The same tag creates a GitHub release with the prebuilt tarball (`openfront-light-<tag>.tar.gz` + `.sha256`, changelog entry 9). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
 
 Upstream's `deploy.yml`, `release.yml` and PR / issue bot workflows target openfront.io infrastructure and are not used here.
 
@@ -390,18 +415,18 @@ Deploying, pushing images and running `deploy.sh` touch real infrastructure. Nev
 
 - **English only** in the repo (see top).
 - **UI text**: all user-visible text goes through `translateText()` with a key added to `resources/lang/en.json` (kept sorted, enforced by `tests/EnJsonSorted.test.ts`). Do not edit other language files.
-- **Core determinism**: see Architecture. Core must not use DOM or Node APIs, nor `src/server`. A few legacy imports from `src/client` exist: `renderNumber` / `renderTroops` / `translateText` from `client/Utils`, view types from `client/view`, `PlayerState` from `client/render/types`, `NameBoxCalculator` (in `GameRunner.ts`), and `src/core/game/UserSettings.ts` pulls in `GraphicsOverrides`, `StatsConstants` and `DesktopShell`. Do not add new ones, and never pull in anything with side effects or non-deterministic behavior.
-- **Tests**: Vitest with `jsdom` (`tests/setup.ts`). Core tests use `setup()` from `tests/util/Setup.ts`, which builds a real game from the maps in `tests/testdata/maps/`. Exercise the real simulation, not mocks. Server tests live in `tests/server/`, client tests in `tests/client/`.
-- **Lint and format**: Oxlint + ESLint + Prettier (`prettier-plugin-organize-imports` sorts imports). The Husky pre-commit hook runs `lint-staged`. Run `npm run lint` and `npm run format` before finishing.
-- **Generated files**: `src/core/game/Maps.gen.ts` and `resources/maps/*` come from `npm run gen-maps`. `static/`, `out/` and `src/assets/` are build outputs.
-- **TypeScript**: `strictNullChecks` (not full `strict`), ESM (`"type": "module"`), path aliases `src/*` and `resources/*`, run with `tsx` on the server. Validate external data with Zod schemas.
+- **Engine determinism**: see Architecture. The package import graph is enforced by `tests/LayerBoundaries.test.ts`.
+- **Tests**: Vitest. Only `tests/client/**` runs under jsdom; anything else that needs `document` / `window` starts with `// @vitest-environment jsdom`. Engine tests use `setup()` from `tests/util/Setup.ts`, which builds a real game from the maps in `tests/testdata/maps/`. Exercise the real simulation, not mocks. Server tests live in `tests/server/`, client tests in `tests/client/`.
+- **Lint and format**: Oxlint + Oxfmt. The Husky pre-commit hook runs `lint-staged`. Run `npm run lint` and `npm run format` before finishing.
+- **Generated files**: `packages/engine-api/src/game/Maps.gen.ts` and `resources/maps/*` come from `npm run gen-maps`. `static/`, `out/` and `src/assets/` are build outputs.
+- **TypeScript**: `strictNullChecks` (not full `strict`), ESM (`"type": "module"`), path aliases `src/*` and `resources/*` plus the `@openfront/*` workspace packages, run with `tsx` on the server. Validate external data with Zod schemas.
 - **Comments**: the codebase explains _why_ in detailed comments, especially in server and deploy code. Match that style and keep the comments accurate when you change behavior.
 - **Contributions**: PRs need an `approved` issue, and AI-assisted PRs must be fully understood by the author (`CONTRIBUTING.md`). New contributors are limited to UI and small fixes.
 - **Legal**: keep the "© OpenFront and Contributors" notices (footer and loading screen) required by the AGPL Section 7 terms. Never move `proprietary/` assets into open folders.
 
 ## Tech stack
 
-- **Language**: TypeScript 6 (ESM), Go for `map-generator/`
+- **Language**: TypeScript 7 (ESM), npm workspaces under `packages/`
 - **Bundler / dev server**: Vite 8 (+ `@tailwindcss/vite`, `vite-plugin-html`)
 - **Rendering**: custom WebGL2 renderer with GLSL shaders (`src/client/render/`)
 - **UI**: Lit 3 (LitElement) + Tailwind CSS 4
@@ -409,7 +434,7 @@ Deploying, pushing images and running `deploy.sh` touch real infrastructure. Nev
 - **Schemas / validation**: Zod 4 + `zbin` binary codec
 - **Server**: Node.js 24, Express 5, `ws`, `jose` (JWT), Winston + OpenTelemetry
 - **Testing**: Vitest 4 (jsdom, `vitest-canvas-mock`)
-- **Lint / format**: Oxlint, ESLint 10, Prettier 3, Husky + lint-staged
+- **Lint / format**: Oxlint, Oxfmt, Husky + lint-staged
 - **Infra**: Docker (GHCR), nginx, supervisord, Traefik, Hetzner hosts, Cloudflare (API Worker, R2, CDN, Turnstile)
 
 ## Further reading
@@ -422,9 +447,8 @@ Deploying, pushing images and running `deploy.sh` touch real infrastructure. Nev
 | `docs/API.md`                 | Public API endpoints (served by the closed-source API)  |
 | `docs/Maps.md`                | Maps                                                    |
 | `docs/GameServerRefactor.md`  | GameServer testing and refactor plan                    |
-| `zbin/README.md`              | Binary wire format                                      |
+| `packages/zbin/README.md`     | Binary wire format                                      |
 | `map-generator/README.md`     | Creating and generating maps                            |
-| `src/core/snapshot/README.md` | Snapshot format                                         |
 | `src/client/render/CLAUDE.md` | Renderer pipeline and pass conventions                  |
 | `CONTRIBUTING.md`             | Contribution workflow and governance                    |
 | `LICENSING.md`                | License history, open vs proprietary assets             |

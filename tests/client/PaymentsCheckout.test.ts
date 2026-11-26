@@ -108,6 +108,29 @@ describe("createPaymentsCheckout request shape", () => {
     });
   });
 
+  it("sends the placement for a currency pack, and omits the key without one", async () => {
+    respond(200, OK_BODY);
+    await createPaymentsCheckout({
+      provider: "stripe",
+      kind: "currency_pack",
+      packName: "starter_pack",
+      placement: { kind: "tab", tab: "cosmetics", subTab: "patterns" },
+    });
+    expect(lastBody().placement).toEqual({
+      kind: "tab",
+      tab: "cosmetics",
+      subTab: "patterns",
+    });
+
+    respond(200, OK_BODY);
+    await createPaymentsCheckout({
+      provider: "stripe",
+      kind: "currency_pack",
+      packName: "starter_pack",
+    });
+    expect("placement" in lastBody()).toBe(false);
+  });
+
   it("sends hardAmount (and nothing else) for custom_currency", async () => {
     respond(200, { ...OK_BODY, kind: "custom_currency" });
 
@@ -409,6 +432,22 @@ describe("createPaymentsCheckout errors", () => {
     });
   });
 
+  it("maps 409 subscription_past_due", async () => {
+    respond(409, {
+      reason: "subscription_past_due",
+      existingProvider: "stripe",
+      existingTier: "sovereign",
+      message: "Your subscription has an unpaid invoice.",
+    });
+    expect(
+      await createPaymentsCheckout({
+        provider: "stripe",
+        kind: "subscription_tier",
+        tierName: "sovereign",
+      }),
+    ).toEqual({ ok: false, code: "subscription_past_due" });
+  });
+
   it("maps 409 tier_change_unavailable_on_provider with the server's message", async () => {
     respond(409, {
       reason: "tier_change_unavailable_on_provider",
@@ -444,6 +483,14 @@ describe("createPaymentsCheckout errors", () => {
       ok: false,
       code: "rate_limited",
       retryAfterSeconds: null,
+    });
+  });
+
+  it("maps 403 steam_licence_required", async () => {
+    respond(403, { reason: "steam_licence_required" });
+    expect(await checkout()).toEqual({
+      ok: false,
+      code: "steam_licence_required",
     });
   });
 

@@ -1,7 +1,8 @@
-import { anonWordName } from "../core/AnonNames";
-import { GameMode } from "../core/game/Game";
-import { ClientID, GameConfig, GameInfo, GameStartInfo } from "../core/Schemas";
-import { simpleHash } from "../core/Util";
+import { GameMode } from "@openfront/engine-api/game/GameTypes";
+import { ClientID, GameConfig } from "@openfront/engine-api/Schemas";
+import { simpleHash } from "@openfront/engine-lib/Util";
+import { anonWordName } from "@openfront/shared/AnonNames";
+import { GameInfo, WireGameStartInfo } from "@openfront/shared/WireSchemas";
 import { Client } from "./Client";
 
 // Who may see whose real identity, and what each viewer is shown instead.
@@ -148,9 +149,9 @@ export class NameVisibility {
   startInfoFor(
     viewer: ClientID,
     isAdmin: boolean,
-    real: GameStartInfo,
-    wire: GameStartInfo,
-  ): GameStartInfo {
+    real: WireGameStartInfo,
+    wire: WireGameStartInfo,
+  ): WireGameStartInfo {
     const config = this.view.config();
     const revealClanTags = isAdmin && config.gameMode === GameMode.FFA;
     if (!config.anonymizeNames) {
@@ -160,12 +161,22 @@ export class NameVisibility {
       ...wire,
       players: wire.players.map((p, i) => {
         const seesReal = this.seesReal(viewer, p.clientID);
+        // A teammate reveal is narrower (see lobbyClients): the card, but
+        // not the publicId that opens the player's whole profile.
+        const teammateOnly =
+          seesReal && !this.seesRealBeyondTeam(viewer, p.clientID);
         return {
           ...p,
           username: seesReal ? p.username : this.anonName(viewer, p.clientID),
           clanTag: revealClanTags ? real.players[i].clanTag : null,
           friends: undefined,
           cosmetics: seesReal ? p.cosmetics : undefined,
+          // The card names the player as surely as their name does.
+          card: !seesReal
+            ? undefined
+            : teammateOnly
+              ? withoutPublicId(p.card)
+              : p.card,
         };
       }),
     };
@@ -210,6 +221,15 @@ export class NameVisibility {
         verified: c.cosmetics?.verified,
         spectator: c.spectator || undefined,
         teamIndex: this.view.teamIndex(c),
+        // Only beside a real name — the anonymized branch above omits it, as a
+        // level beside an anonymous name would point out the veterans. Kept on
+        // a teammate reveal: it describes the teammate alone, like `verified`.
+        levelBadge: c.wireLevelBadge,
+        // Only beside a real name, like levelBadge. Client.card is the card
+        // resolveCard checked at join, so its background is owned, in the
+        // catalogue, and the player owns the card; the join message's
+        // cosmetics never reach it.
+        cardBackground: c.card?.background,
       };
     });
   }
@@ -236,4 +256,13 @@ export function friendsLookup(
       .filter((id): id is ClientID => id !== undefined);
     return friendClientIDs.length > 0 ? friendClientIDs : undefined;
   };
+}
+
+function withoutPublicId<T extends { publicId?: string }>(
+  card: T | undefined,
+): Omit<T, "publicId"> | undefined {
+  if (card === undefined) return undefined;
+  const rest = { ...card };
+  delete rest.publicId;
+  return rest;
 }

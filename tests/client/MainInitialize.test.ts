@@ -6,19 +6,25 @@
  * cannot be re-defined in the file's single jsdom, so a second import of Main
  * (after vi.resetModules) would throw on the first `customElements.define`.
  */
+import { EventBus } from "@openfront/shared/EventBus";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { ClientEnv } from "../../src/client/ClientEnv";
+import type { DesktopSessionState } from "../../src/client/DesktopShell";
+import { GameModeSelector } from "../../src/client/GameModeSelector";
+import { loadModal } from "../../src/client/LazyModals";
+import { SendKickPlayerIntentEvent } from "../../src/client/LobbyEvents";
 import { capturePagePin } from "../../src/client/PagePin";
-import { SendKickPlayerIntentEvent } from "../../src/client/Transport";
 import { translateText } from "../../src/client/Utils";
-import { EventBus } from "../../src/core/EventBus";
 
 const mocks = vi.hoisted(() => ({
   userAuth: vi.fn(async (): Promise<unknown> => false),
   retrySteamSignIn: vi.fn(async (): Promise<unknown> => false),
-  reauthAfterCrazyGamesChange: vi.fn(async (): Promise<unknown> => false),
-  getDesktopSessionState: vi.fn(() => ({ status: "unknown" })),
+  reauthAfterPortalChange: vi.fn(async (): Promise<unknown> => false),
+  getDesktopSessionState: vi.fn((): DesktopSessionState => ({
+    status: "unknown",
+  })),
   getUserMe: vi.fn(async (): Promise<unknown> => false),
   invalidateUserMe: vi.fn(),
   joinLobby: vi.fn(),
@@ -32,7 +38,7 @@ vi.mock("../../src/client/Auth", async (importOriginal) => {
     ...actual,
     userAuth: mocks.userAuth,
     retrySteamSignIn: mocks.retrySteamSignIn,
-    reauthAfterCrazyGamesChange: mocks.reauthAfterCrazyGamesChange,
+    reauthAfterPortalChange: mocks.reauthAfterPortalChange,
     getDesktopSessionState: mocks.getDesktopSessionState,
   };
 });
@@ -63,6 +69,12 @@ vi.mock("../../src/client/BootInterrupts", () => ({
   claimPromptDue: () => false,
   claimPromptStringsReady: () => false,
   steamGrantStringsReady: () => false,
+  reportThanksStringsReady: () => false,
+  reportThanksDueThisLaunch: () => false,
+  giftEndingStringsReady: () => false,
+  renewalPushedStringsReady: () => false,
+  renewalPushedDueThisLaunch: () => false,
+  renewalPushedOf: () => null,
   joinOwnsInFlightFlag: () => true,
   lapseShownAfterDispatch: (
     _resp: unknown,
@@ -83,6 +95,16 @@ vi.mock("../../src/client/BootInterrupts", () => ({
 vi.mock("../../src/client/ClientGameRunner", () => ({
   joinLobby: mocks.joinLobby,
 }));
+
+// The viewer pulls in the WebGL renderer. A bare element is enough to see
+// that Main opened it, and for which game.
+vi.mock("../../src/client/replay/ReplayViewer", () => {
+  class ReplayViewer extends HTMLElement {
+    gameID = "";
+  }
+  customElements.define("replay-viewer", ReplayViewer);
+  return { ReplayViewer };
+});
 
 function userMeFixture(): unknown {
   return {
@@ -201,6 +223,17 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
       JSON.stringify({ playerId: "p1", names: ["win_ffa"] }),
     );
 
+    // Boot's userAuth() is held open until the lobby click below has run:
+    // on Poki it waits seconds on the SDK, and the menu is up meanwhile.
+    let releaseBootAuth: () => void = () => {};
+    const bootAuth = new Promise<void>((resolve) => {
+      releaseBootAuth = resolve;
+    });
+    mocks.userAuth.mockImplementation(async () => {
+      await bootAuth;
+      return false;
+    });
+
     // The import runs bootstrap: component registration, element upgrades,
     // then `new Client().initialize()`.
     await import("../../src/client/Main");
@@ -209,12 +242,68 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
       document.dispatchEvent(new Event("DOMContentLoaded", { bubbles: true }));
     }
 
+    await vi.waitFor(() => expect(mocks.userAuth).toHaveBeenCalled());
+    await joinPublicLobbyDuringBootAuth();
+    releaseBootAuth();
+    mocks.userAuth.mockImplementation(async () => false);
+
     // After `await userAuth()` resolves, the remainder of initialize() is
     // synchronous — one flush after the call is observed means the hashchange
     // listener, join-lobby listener and slider wiring are all in place.
-    await vi.waitFor(() => expect(mocks.userAuth).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 25));
+    // Let that join land, then leave it so the tests below start in the menu.
+    await vi.waitFor(() => expect(mocks.joinLobby).toHaveBeenCalled());
+    document.dispatchEvent(new CustomEvent("leave-lobby", { bubbles: true }));
+    mocks.joinLobby.mockClear();
   }, 20_000);
+
+  let joinModalOpenedDuringBootAuth = false;
+
+  async function joinPublicLobbyDuringBootAuth(): Promise<void> {
+    const input = document.querySelector("username-input") as unknown as {
+      canPlay: () => boolean;
+    };
+    const canPlay = input.canPlay;
+    input.canPlay = () => true;
+    await loadModal("join-lobby-modal");
+    const joinModal = document.querySelector("join-lobby-modal") as unknown as {
+      open: (args?: Record<string, unknown>) => void;
+    };
+    const open = vi.spyOn(joinModal, "open").mockImplementation(() => {});
+    mocks.joinLobby.mockReturnValueOnce({
+      prestart: new Promise<void>(() => {}),
+      join: new Promise<void>(() => {}),
+      stop: () => true,
+    });
+    try {
+      document.dispatchEvent(
+        new CustomEvent("join-lobby", {
+          detail: { gameID: "AbCd1234", source: "public" },
+          bubbles: true,
+        }),
+      );
+      await vi.waitFor(() => expect(open).toHaveBeenCalled(), {
+        timeout: 2000,
+      });
+      joinModalOpenedDuringBootAuth = true;
+    } catch {
+      joinModalOpenedDuringBootAuth = false;
+    } finally {
+      open.mockRestore();
+      input.canPlay = canPlay;
+    }
+  }
+
+  it("opens the join modal for a lobby clicked while boot waits on auth", () => {
+    expect(joinModalOpenedDuringBootAuth).toBe(true);
+  });
+
+  // Returning to page-play schedules Main's 50ms store refresh. Let it run
+  // before jsdom is torn down, or it throws "customElements is not defined"
+  // as an unhandled error that fails the whole run.
+  afterAll(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
 
   it("runs the signed-out boot: onUserMe(false) and the missing-version warn", () => {
     // renderNavVersion() === 0 branch (line 411).
@@ -228,12 +317,74 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
     expect(localStorage.getItem("achievements.pushed")).toBeNull();
   });
 
+  it("starts the menu audio once its chunk loads", async () => {
+    // Its own chunk, so the page doesn't wait on howler.
+    const { audioMixer } = await import("../../src/client/sound/AudioMixer");
+    await vi.waitFor(() => expect(audioMixer()).not.toBeNull());
+  });
+
+  it("hands the lobby modals the event bus before a loader can open them", async () => {
+    const seen: unknown[] = [];
+    for (const tag of ["host-lobby-modal", "join-lobby-modal"]) {
+      await loadModal(tag);
+      // Read as soon as loadModal settles: what an opener would find.
+      seen.push(
+        (document.querySelector(tag) as unknown as { eventBus: unknown })
+          .eventBus,
+      );
+    }
+    expect(seen.every((bus) => bus instanceof EventBus)).toBe(true);
+  });
+
   it("routes a hashchange through onHashUpdate", async () => {
+    // It loads on demand; until it has, there's nothing to close.
+    await loadModal("join-lobby-modal");
     const joinModal = document.querySelector("join-lobby-modal") as unknown as {
       close: () => void;
     };
     const closeSpy = vi.spyOn(joinModal, "close").mockImplementation(() => {});
     window.dispatchEvent(new Event("hashchange"));
+    await vi.waitFor(() => expect(closeSpy).toHaveBeenCalled());
+    closeSpy.mockRestore();
+  });
+
+  it("does not close the lobby when navigating back from a router modal (popstate and hashchange)", async () => {
+    await loadModal("join-lobby-modal");
+    await loadModal("news-modal");
+    const newsModal = document.querySelector("news-modal") as unknown as {
+      close: () => void;
+    };
+    const newsCloseSpy = vi.spyOn(newsModal, "close");
+    const joinModal = document.querySelector("join-lobby-modal") as unknown as {
+      close: () => void;
+    };
+    const joinCloseSpy = vi
+      .spyOn(joinModal, "close")
+      .mockImplementation(() => {});
+
+    window.location.hash = "#modal=news";
+    window.dispatchEvent(new Event("hashchange"));
+
+    history.replaceState(null, "", window.location.pathname);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    window.dispatchEvent(new Event("hashchange"));
+
+    expect(newsCloseSpy).toHaveBeenCalled();
+    expect(joinCloseSpy).not.toHaveBeenCalled();
+    joinCloseSpy.mockRestore();
+    newsCloseSpy.mockRestore();
+  });
+
+  it("closes the join modal when navigating back to root without a modal", async () => {
+    await loadModal("join-lobby-modal");
+    const joinModal = document.querySelector("join-lobby-modal") as unknown as {
+      close: () => void;
+    };
+    const closeSpy = vi.spyOn(joinModal, "close").mockImplementation(() => {});
+
+    history.replaceState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
     await vi.waitFor(() => expect(closeSpy).toHaveBeenCalled());
     closeSpy.mockRestore();
   });
@@ -245,13 +396,14 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
     const canPlay = vi.fn(() => false);
     input.canPlay = canPlay;
     logSpy.mockClear();
-    document.dispatchEvent(
-      new CustomEvent("join-lobby", {
-        detail: { gameID: "AbCd1234" },
-        bubbles: true,
-      }),
-    );
+    const event = new CustomEvent("join-lobby", {
+      detail: { gameID: "AbCd1234" },
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(event);
     await vi.waitFor(() => expect(canPlay).toHaveBeenCalled());
+    expect(event.defaultPrevented).toBe(true);
     // Early return before the "joining lobby" log — nothing joined.
     expect(logSpy).not.toHaveBeenCalledWith(
       expect.stringContaining("joining lobby"),
@@ -463,10 +615,12 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
      * open a queue WebSocket, and the claim under test is only whether any
      * join reaches close().
      */
-    function spyOnMatchmakingModal(): {
+    async function spyOnMatchmakingModal(): Promise<{
       close: ReturnType<typeof vi.spyOn>;
       restore: () => void;
-    } {
+    }> {
+      // It loads on demand; spy on the loaded one.
+      await loadModal("matchmaking-modal");
       const modal = document.querySelector("matchmaking-modal") as unknown as {
         isOpen: () => boolean;
         close: () => void;
@@ -506,7 +660,7 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
       messages.length = 0;
       mocks.joinLobby.mockClear();
       stubJoinLobbyReturn();
-      const matchmaking = spyOnMatchmakingModal();
+      const matchmaking = await spyOnMatchmakingModal();
 
       try {
         document.dispatchEvent(
@@ -547,7 +701,7 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
       messages.length = 0;
       mocks.joinLobby.mockClear();
       stubJoinLobbyReturn();
-      const matchmaking = spyOnMatchmakingModal();
+      const matchmaking = await spyOnMatchmakingModal();
 
       try {
         document.dispatchEvent(
@@ -601,5 +755,389 @@ describe("Client.initialize() booted from Main.ts module scope", () => {
         translateText("common.backend_unreachable"),
       );
     });
+  });
+
+  it("keeps the root pathname for singleplayer games without rewriting to /game/<id>", async () => {
+    mocks.joinLobby.mockClear();
+    let resolveJoin = () => {};
+    mocks.joinLobby.mockReturnValueOnce({
+      prestart: new Promise<void>(() => {}),
+      join: new Promise<void>((r) => {
+        resolveJoin = r;
+      }),
+      stop: () => true,
+    });
+    (document.querySelector("username-input") as any).canPlay = () => true;
+    try {
+      history.replaceState(null, "", "/");
+      document.dispatchEvent(
+        new CustomEvent("join-lobby", {
+          detail: { gameID: "sp12345", source: "singleplayer" },
+          bubbles: true,
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.joinLobby).toHaveBeenCalled());
+      resolveJoin();
+      await vi.waitFor(() => expect(window.location.pathname).toBe("/"));
+      expect(window.location.href).not.toMatch(/game\/sp12345/);
+    } finally {
+      document.dispatchEvent(new CustomEvent("leave-lobby"));
+    }
+  });
+
+  it("ignores the replay viewer hash while a game is running", async () => {
+    mocks.joinLobby.mockClear();
+    let resolveJoin: () => void = () => {};
+    mocks.joinLobby.mockReturnValueOnce({
+      prestart: new Promise<void>(() => {}),
+      join: new Promise<void>((resolve) => {
+        resolveJoin = resolve;
+      }),
+      stop: () => true,
+    });
+    const input = document.querySelector("username-input") as unknown as {
+      canPlay: () => boolean;
+    };
+    input.canPlay = () => true;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      document.dispatchEvent(
+        new CustomEvent("join-lobby", {
+          detail: { gameID: "AbCd5678", source: "private" },
+          bubbles: true,
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.joinLobby).toHaveBeenCalled());
+      resolveJoin();
+      // The in-game entry, which Main keeps as the game's URL.
+      await vi.waitFor(() =>
+        expect(window.location.href).toMatch(/game\/AbCd5678/),
+      );
+      const gameUrl = window.location.href;
+      const replaceSpy = vi.spyOn(history, "replaceState");
+
+      window.location.hash = "#replay-viewer=dqKzit4cWu";
+      window.dispatchEvent(new Event("hashchange"));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(document.querySelector("replay-viewer")).toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        "replay viewer: ignored, a game is running",
+      );
+      // The game's URL is put back.
+      expect(replaceSpy).toHaveBeenCalledWith(null, "", gameUrl);
+      replaceSpy.mockRestore();
+    } finally {
+      // Leave, so the viewer can open in the next test.
+      document.dispatchEvent(new CustomEvent("leave-lobby"));
+      warn.mockRestore();
+    }
+  });
+
+  describe("Matchmaking, join refusal, and Turnstile error handling", () => {
+    it("does not lock GameModeSelector when a matchmaking join is refused by username or blockedJoin", async () => {
+      const selector = document.querySelector(
+        "game-mode-selector",
+      ) as GameModeSelector;
+      const input = document.querySelector("username-input") as unknown as {
+        canPlay: () => boolean;
+      };
+      const prevCanPlay = input.canPlay;
+      const prevDesktop = (window as { openfrontDesktop?: unknown })
+        .openfrontDesktop;
+
+      try {
+        // 1) Username refusal
+        input.canPlay = () => false;
+        const usernameEv = new CustomEvent("join-lobby", {
+          detail: { gameID: "mmRefuseUser1", source: "matchmaking" },
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        });
+        document.dispatchEvent(usernameEv);
+        await vi.waitFor(() => expect(usernameEv.defaultPrevented).toBe(true));
+        expect(selector.inLobby).toBe(false);
+        expect(selector.joiningLobbyId).toBeNull();
+
+        // 2) blockedJoin refusal (Steam session signed out)
+        input.canPlay = () => true;
+        (window as { openfrontDesktop?: unknown }).openfrontDesktop = {
+          steam: {},
+        };
+        mocks.getDesktopSessionState.mockReturnValue({
+          status: "signed-out",
+          reason: "needs-account",
+        });
+
+        const blockedEv = new CustomEvent("join-lobby", {
+          detail: { gameID: "mmRefuseDesk1", source: "matchmaking" },
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        });
+        document.dispatchEvent(blockedEv);
+        await vi.waitFor(() => expect(blockedEv.defaultPrevented).toBe(true));
+        expect(selector.inLobby).toBe(false);
+        expect(selector.joiningLobbyId).toBeNull();
+      } finally {
+        input.canPlay = prevCanPlay;
+        if (prevDesktop === undefined) {
+          delete (window as { openfrontDesktop?: unknown }).openfrontDesktop;
+        } else {
+          (window as { openfrontDesktop?: unknown }).openfrontDesktop =
+            prevDesktop;
+        }
+        mocks.getDesktopSessionState.mockReturnValue({ status: "unknown" });
+      }
+    });
+
+    it("Matchmaking Back cancels pending join and unlocks GameModeSelector while prestart closeMenu() does not emit leave-lobby", async () => {
+      await loadModal("matchmaking-modal");
+      const modal = document.querySelector(
+        "matchmaking-modal",
+      ) as HTMLElement & {
+        mode: string;
+        open: () => void;
+        close: () => void;
+        isOpen: () => boolean;
+        updateComplete: Promise<unknown>;
+      };
+      const selector = document.querySelector(
+        "game-mode-selector",
+      ) as GameModeSelector;
+      const input = document.querySelector("username-input") as unknown as {
+        canPlay: () => boolean;
+      };
+      input.canPlay = () => true;
+
+      const realWs = globalThis.WebSocket;
+      const realFetch = globalThis.fetch;
+      const sockets: Array<{
+        onmessage: ((ev: { data: string }) => void) | null;
+        close: () => void;
+      }> = [];
+
+      class TestWebSocket {
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+        static readonly CLOSED = 3;
+        readyState = TestWebSocket.OPEN;
+        onopen: (() => void) | null = null;
+        onmessage: ((ev: { data: string }) => void) | null = null;
+        onerror: (() => void) | null = null;
+        onclose: (() => void) | null = null;
+        constructor() {
+          sockets.push(this);
+        }
+        send() {}
+        close() {
+          this.readyState = TestWebSocket.CLOSED;
+        }
+      }
+
+      globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ exists: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ) as unknown as typeof fetch;
+      mocks.getUserMe.mockResolvedValue(userMeFixture());
+      mocks.joinLobby.mockClear();
+
+      const leaveEvents: CustomEvent[] = [];
+      const onLeave = (e: Event) => leaveEvents.push(e as CustomEvent);
+      document.addEventListener("leave-lobby", onLeave);
+
+      try {
+        // Part 1: Back during pending join (held on userAuth before joinLobby)
+        let resolveAuth: (value: unknown) => void = () => {};
+        mocks.userAuth.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              resolveAuth = resolve;
+            }),
+        );
+
+        modal.mode = "1v1";
+        modal.open();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1));
+        await modal.updateComplete;
+
+        sockets[0].onmessage?.({
+          data: JSON.stringify({
+            type: "match-assignment",
+            gameId: "mmBack1234",
+          }),
+        });
+
+        await vi.waitFor(() => expect(selector.inLobby).toBe(true), {
+          timeout: 3000,
+        });
+        expect(selector.joiningLobbyId).toBe("mmBack1234");
+        expect(mocks.joinLobby).not.toHaveBeenCalled();
+
+        const backLabel = translateText("common.back");
+        const backBtn = modal.querySelector<HTMLButtonElement>(
+          `[aria-label="${backLabel}"]`,
+        );
+        expect(backBtn).not.toBeNull();
+        backBtn!.click();
+
+        expect(leaveEvents).toHaveLength(1);
+        expect(window.location.pathname).toBe("/");
+        expect(selector.inLobby).toBe(false);
+        expect(selector.joiningLobbyId).toBeNull();
+
+        resolveAuth(false);
+        await new Promise((r) => setTimeout(r, 30));
+        expect(mocks.joinLobby).not.toHaveBeenCalled();
+
+        // Part 2: prestart closeMenu() closes MatchmakingModal without emitting leave-lobby
+        leaveEvents.length = 0;
+        mocks.userAuth.mockImplementation(async () => false);
+        let resolvePrestart: () => void = () => {};
+        mocks.joinLobby.mockReturnValueOnce({
+          prestart: new Promise<void>((resolve) => {
+            resolvePrestart = resolve;
+          }),
+          join: new Promise<void>(() => {}),
+          stop: () => true,
+        });
+
+        modal.open();
+        await vi.waitFor(() => expect(sockets).toHaveLength(2));
+        sockets[1].onmessage?.({
+          data: JSON.stringify({
+            type: "match-assignment",
+            gameId: "mmPre12345",
+          }),
+        });
+
+        await vi.waitFor(
+          () => expect(mocks.joinLobby).toHaveBeenCalledTimes(1),
+          { timeout: 3000 },
+        );
+        expect(leaveEvents).toHaveLength(0);
+
+        resolvePrestart();
+        await vi.waitFor(() => expect(modal.isOpen()).toBe(false));
+        expect(leaveEvents).toHaveLength(0);
+      } finally {
+        document.removeEventListener("leave-lobby", onLeave);
+        modal.close();
+        document.dispatchEvent(new CustomEvent("leave-lobby"));
+        (
+          document.querySelector("game-starting-modal") as {
+            hide?: () => void;
+          } | null
+        )?.hide?.();
+        globalThis.WebSocket = realWs;
+        globalThis.fetch = realFetch;
+        mocks.getUserMe.mockImplementation(async () => false);
+        mocks.userAuth.mockImplementation(async () => false);
+      }
+    }, 10_000);
+
+    it("routes Turnstile error alert through translateText with the error code", async () => {
+      const prevGameEnv = (window as any).BOOTSTRAP_CONFIG.gameEnv;
+      const prevTurnstile = (window as any).turnstile;
+      const input = document.querySelector("username-input") as unknown as {
+        canPlay: () => boolean;
+      };
+      input.canPlay = () => true;
+
+      let errorCallback: ((code: string) => void) | undefined;
+      (window as any).BOOTSTRAP_CONFIG.gameEnv = "prod";
+      ClientEnv.reset();
+      (window as any).turnstile = {
+        render: (
+          _container: unknown,
+          opts: { "error-callback"?: (code: string) => void },
+        ) => {
+          errorCallback = opts["error-callback"];
+          return "widget-err";
+        },
+        execute: () => errorCallback?.("300030"),
+        remove: () => {},
+      };
+
+      try {
+        document.dispatchEvent(
+          new CustomEvent("join-lobby", {
+            detail: { gameID: "turnErr123", source: "public" },
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+
+        await vi.waitFor(() => {
+          const dialog = document.querySelector("confirm-dialog") as {
+            message?: string;
+          } | null;
+          expect(dialog).not.toBeNull();
+          expect(dialog!.message).toContain("300030");
+        });
+      } finally {
+        document.querySelector("confirm-dialog")?.remove();
+        document.dispatchEvent(new CustomEvent("leave-lobby"));
+        (window as any).turnstile = prevTurnstile;
+        (window as any).BOOTSTRAP_CONFIG.gameEnv = prevGameEnv;
+        ClientEnv.reset();
+      }
+    });
+  });
+
+  // Last: the viewer replaces the menu, and any later hash change would
+  // then leave the page.
+  it("opens the replay viewer when the hash changes to one, tearing the menu down like a game start", async () => {
+    await loadModal("join-lobby-modal");
+    const joinModal = document.querySelector("join-lobby-modal") as unknown as {
+      close: () => void;
+      disarmLeaveOnClose: () => void;
+      closeWithoutLeaving: () => void;
+    };
+    const disarmSpy = vi.spyOn(joinModal, "disarmLeaveOnClose");
+    const closeWithoutLeavingSpy = vi.spyOn(joinModal, "closeWithoutLeaving");
+    // What JoinLobbyModal.onClose does when there's no lobby to keep.
+    const closeSpy = vi
+      .spyOn(joinModal, "close")
+      .mockImplementation(() => history.replaceState(null, "", "/"));
+    // The viewer tears the menu down like a game start. A modal the router
+    // opened clears the hash when it closes (ModalRouter.syncClosed).
+    const gameStarting = vi.fn();
+    document.addEventListener("game-starting", gameStarting);
+    // Loaded on demand: the router loads a modal before opening it.
+    await loadModal("news-modal");
+    const news = document.querySelector("news-modal") as unknown as {
+      close: () => void;
+    };
+    const newsClose = vi
+      .spyOn(news, "close")
+      .mockImplementation(() =>
+        history.replaceState(null, "", window.location.pathname),
+      );
+    window.location.hash = "#replay-viewer=dqKzit4cWu";
+    window.dispatchEvent(new Event("hashchange"));
+    await vi.waitFor(() =>
+      expect(
+        (document.querySelector("replay-viewer") as { gameID?: string } | null)
+          ?.gameID,
+      ).toBe("dqKzit4cWu"),
+    );
+    expect(gameStarting).toHaveBeenCalledOnce();
+    expect(newsClose).toHaveBeenCalled();
+    // A lobby modal is closed like at a game start: disarmed, so closing it
+    // doesn't leave a lobby it never joined.
+    expect(disarmSpy).toHaveBeenCalled();
+    expect(closeWithoutLeavingSpy).toHaveBeenCalled();
+    // Kept, so a reload opens the replay again.
+    expect(window.location.hash).toBe("#replay-viewer=dqKzit4cWu");
+    document.removeEventListener("game-starting", gameStarting);
+    newsClose.mockRestore();
+    closeSpy.mockRestore();
+    disarmSpy.mockRestore();
+    closeWithoutLeavingSpy.mockRestore();
   });
 });

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiEnabledForTests } from "../src/client/ApiBase";
 
@@ -5,7 +6,7 @@ import { setApiEnabledForTests } from "../src/client/ApiBase";
 // covers the upstream behaviour, so it turns it back on.
 setApiEnabledForTests(true);
 
-vi.mock("../src/core/game/UserSettings", () => ({
+vi.mock("../src/client/UserSettings", () => ({
   UserSettings: { setPlayerId: vi.fn() },
 }));
 vi.mock("../src/client/SteamSDK", () => ({
@@ -21,7 +22,8 @@ vi.mock("../src/client/CrazyGamesSDK", () => ({
   },
 }));
 
-const { clearLocalSession, userAuth } = await import("../src/client/Auth");
+const { clearLocalSession, reauthAfterPortalChange, userAuth } =
+  await import("../src/client/Auth");
 const { ClientEnv } = await import("../src/client/ClientEnv");
 
 // Deliberately not userMeResponse: account state lives partly outside that
@@ -91,5 +93,29 @@ describe("clearLocalSession", () => {
     // Guests clear on every failed refresh; announcing each one would churn
     // every consumer for no change.
     expect(seen).toEqual([]);
+  });
+});
+
+// A portal account change swaps the session for another account's without a
+// sign-out in between. Anything queued for the old account (the card save
+// queue) has to hear it before the new token is in place.
+describe("reauthAfterPortalChange", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("announces the session change before re-authenticating", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ status: 401, json: async () => ({}) })),
+    );
+    const seen: string[] = [];
+    const listener = (e: Event) => seen.push(e.type);
+    document.addEventListener("session-reauth", listener);
+    const done = reauthAfterPortalChange();
+    // Synchronously: no save may be sent once the old token is dropped.
+    expect(seen).toEqual(["session-reauth"]);
+    await done.catch(() => {});
+    document.removeEventListener("session-reauth", listener);
   });
 });

@@ -1,11 +1,12 @@
+import { GAME_ID_REGEX } from "@openfront/engine-api/Schemas";
+import { replacer } from "@openfront/shared/SharedUtil";
+import { GameInfo } from "@openfront/shared/WireSchemas";
 import type { Express, Request } from "express";
 import fsPromises from "fs/promises";
 import { parse } from "node-html-parser";
 import path from "path";
 import type { Logger } from "winston";
 import { z } from "zod";
-import { GAME_ID_REGEX, GameInfo } from "../core/Schemas";
-import { replacer } from "../core/Util";
 import type { GameManager } from "./GameManager";
 import {
   buildPreview,
@@ -47,7 +48,7 @@ export function registerGamePreviewRoute(opts: {
   const fetchPublicGameInfo = async (
     gameID: string,
   ): Promise<ExternalGameInfo | null> => {
-    if (!gameIDSchema.safeParse(gameID).success) return null;
+    if (!gameIDSchema.validate(gameID)) return null;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1500);

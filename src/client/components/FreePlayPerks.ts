@@ -1,5 +1,5 @@
 import { html, TemplateResult } from "lit";
-import { isDesktopShell } from "../DesktopShell";
+import { isSteamShell } from "../DesktopShell";
 import { translateText } from "../Utils";
 
 const PERK_KEYS = [
@@ -14,14 +14,25 @@ const PERK_KEYS = [
  * talks about a subscription ending, so "ends" is never read as "the game
  * stops".
  *
- * The ad-free line is only true in the desktop build, where Main switches ads
+ * The ad-free line is only true in the Steam build, where Main switches ads
  * off for every session regardless of tier; a free player on the website does
- * see ads, so the same list there must not promise otherwise.
+ * see ads, so the same list there must not promise otherwise. (The Android
+ * app has no ads either, but the line names the Steam app.)
+ *
+ * A Steam licence holder keeps public lobbies and the verified name with no
+ * subscription, so their list says so rather than reading as a downgrade.
  */
-export function renderFreePlayPerks(headingKey: string): TemplateResult {
-  const keys = isDesktopShell()
-    ? [...PERK_KEYS, "free_play.ad_free_steam"]
-    : PERK_KEYS;
+export function renderFreePlayPerks(
+  headingKey: string,
+  steamLicence = false,
+): TemplateResult {
+  const keys = [
+    ...PERK_KEYS,
+    ...(steamLicence
+      ? ["free_play.licence_public_lobbies", "free_play.licence_verified_name"]
+      : []),
+    ...(isSteamShell() ? ["free_play.ad_free_steam"] : []),
+  ];
   return html`
     <div class="flex flex-col gap-1.5">
       <div class="text-[10px] uppercase tracking-wider text-white/50">

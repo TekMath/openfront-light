@@ -1,7 +1,7 @@
+import { buildAssetUrl } from "@openfront/shared/AssetPaths";
 import ejs from "ejs";
 import type { Response } from "express";
 import fs from "fs/promises";
-import { buildAssetUrl } from "../core/AssetUrls";
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { getRuntimeAssetManifest } from "./RuntimeAssetManifest";
 import { ServerEnv } from "./ServerEnv";
@@ -103,8 +103,13 @@ export async function renderHtmlContent(
         : JSON.stringify(ServerEnv.faroCollectorUrl()),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
+    appleTouchIconHref: buildAssetUrl(
+      "icons/icon512_maskable.png",
+      assetManifest,
+      cdnBase,
+    ),
     gameplayScreenshotUrl: buildAssetUrl(
-      "images/GameplayScreenshot.png",
+      "images/KeyArt.jpg",
       assetManifest,
       cdnBase,
     ),

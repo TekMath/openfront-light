@@ -39,8 +39,8 @@ jobs:
       - run: npm ci
       - run: npm run lint:github
 
-  prettier:
-    name: 🎨 Prettier
+  format:
+    name: 🎨 Format
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -56,7 +56,7 @@ jobs:
       - name: Setup npm
         run: npm install --global --ignore-scripts npm@12.1.0
       - run: npm ci
-      - run: npx prettier --check .
+      - run: npm run format:check
 
   test:
     name: 🔬 Test
@@ -94,7 +94,9 @@ jobs:
       - name: Setup npm
         run: npm install --global --ignore-scripts npm@12.1.0
       - run: npm ci
-      - run: npx tsc --noEmit
+      # Root project plus each package's own tsconfig (engine, engine-api and
+      # engine-lib get no DOM and no Node types).
+      - run: npm run typecheck
       - run: npm run build-server-light
 
   gen-maps:
@@ -113,10 +115,6 @@ jobs:
           cache: "npm"
       - name: Setup npm
         run: npm install --global --ignore-scripts npm@12.1.0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: map-generator/go.mod
-          cache-dependency-path: map-generator/go.sum
       - run: npm ci
       - run: npm run gen-maps
       - name: Check for diff
@@ -132,7 +130,7 @@ jobs:
     # Only a pushed v* tag publishes (see PUSH below), so the name says which
     # of the two this run does.
     name: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && '🐳 Build and publish image' || '🐳 Build image (no publish)' }}
-    needs: [lint, prettier, test, typecheck, gen-maps]
+    needs: [lint, format, test, typecheck, gen-maps]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

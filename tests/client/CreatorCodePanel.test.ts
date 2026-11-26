@@ -20,12 +20,12 @@ vi.mock("../../src/client/Utils", async (importOriginal) => ({
     vars ? `${key}:${JSON.stringify(vars)}` : key,
 }));
 
+import type { UserMeResponse } from "@openfront/shared/ApiSchemas";
 import "../../src/client/components/CreatorCodePanel";
 import type {
   CreatorChangedDetail,
   CreatorCodePanel,
 } from "../../src/client/components/CreatorCodePanel";
-import type { UserMeResponse } from "../../src/core/ApiSchemas";
 
 type CreatorBinding = NonNullable<UserMeResponse["player"]["creator"]>;
 
@@ -288,6 +288,14 @@ describe("CreatorCodePanel", () => {
       expect(setCreatorCode).toHaveBeenCalledWith("OTTER");
       expect(reload).not.toHaveBeenCalled();
       expect(events).toEqual([{ creator: freshCreator }]);
+    });
+
+    it("unsupport is a red text link, change sits beside the input", async () => {
+      const el = await mount(creator());
+      expect(
+        findOButton(el, "creator_code.unsupport")!.getAttribute("variant"),
+      ).toBe("dangerLink");
+      expect(el.querySelector("[data-creator-code-row] o-button")).toBeTruthy();
     });
 
     it("arms then fires unsupport on two clicks (confirm copy warns about the next-bind lock), and refreshes in place (no reload)", async () => {

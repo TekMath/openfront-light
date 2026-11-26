@@ -1,8 +1,8 @@
 import version from "resources/version.txt?raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientEnv } from "../../../src/client/ClientEnv";
-import { composeGameVersion } from "../../../src/client/GameVersion";
 import { Footer } from "../../../src/client/components/Footer";
+import { composeGameVersion } from "../../../src/client/GameVersion";
 
 const SHA = "bf739f86c4e1d2a3b5c6d7e8f90123456789abcd";
 
@@ -38,8 +38,15 @@ describe("page-footer version line", () => {
     return footer;
   }
 
-  it("renders the game version on the web, with no Steam subtext", async () => {
+  it("renders no version line on the web", async () => {
     window.openfrontDesktop = undefined;
+    await mount();
+
+    expect(footer.querySelector(".footer-version")).toBeNull();
+  });
+
+  it("renders the game version alone when the shell reports no version", async () => {
+    window.openfrontDesktop = { steam: {} };
     await mount();
 
     const line = footer.querySelector(".footer-version");
@@ -48,6 +55,7 @@ describe("page-footer version line", () => {
 
   it("appends the shell version inside the desktop shell", async () => {
     window.openfrontDesktop = {
+      steam: {},
       version: () => Promise.resolve("0.2.0"),
     };
     await mount();
@@ -72,7 +80,7 @@ describe("page-footer version line", () => {
       instanceId: "test",
       gitCommit: SHA,
     };
-    window.openfrontDesktop = undefined;
+    window.openfrontDesktop = { steam: {} };
     await mount();
 
     const line = footer.querySelector(".footer-version");
@@ -83,6 +91,7 @@ describe("page-footer version line", () => {
   // the game version alone rather than render a broken label.
   it("falls back to the game version when the bridge rejects", async () => {
     window.openfrontDesktop = {
+      steam: {},
       version: () => Promise.reject(new Error("boom")),
     };
     await mount();

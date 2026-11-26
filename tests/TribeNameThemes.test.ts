@@ -1,7 +1,11 @@
-import { resolveTribeNameData } from "../src/core/execution/utils/TribeNames";
-import { GameMapType, PlayerType } from "../src/core/game/Game";
-import { PseudoRandom } from "../src/core/PseudoRandom";
-import { createRandomName } from "../src/core/Util";
+import {
+  CustomGameMap,
+  GameMapType,
+  PlayerType,
+} from "@openfront/engine-api/game/GameTypes";
+import { resolveTribeNameData } from "@openfront/engine-lib/execution/utils/TribeNames";
+import { PseudoRandom } from "@openfront/engine-lib/PseudoRandom";
+import { createRandomName } from "@openfront/shared/SharedUtil";
 
 describe("resolveTribeNameData", () => {
   test("returns default theme when called with no arguments", () => {
@@ -28,6 +32,10 @@ describe("resolveTribeNameData", () => {
     expect(data.prefixes.length).toBeGreaterThan(0);
     expect(data.suffixes.length).toBeGreaterThan(0);
     expect(data.customTribes).toBeUndefined();
+  });
+
+  test("returns default theme for a Custom map", () => {
+    expect(resolveTribeNameData(CustomGameMap)).toEqual(resolveTribeNameData());
   });
 
   test("returns data for every valid GameMapType without throwing", () => {

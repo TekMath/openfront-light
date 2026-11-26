@@ -101,6 +101,7 @@ export class HeatManager {
       gl,
       fullscreenNoUvVertSrc,
       shaderSrc(heatDecayFragSrc, TILE_DEFINES),
+      "HeatManager",
     );
     this.uDecayMapSize = gl.getUniformLocation(this.decayProg, "uMapSize")!;
     this.uDecayAmount = gl.getUniformLocation(this.decayProg, "uDecay")!;
@@ -145,6 +146,11 @@ export class HeatManager {
   /** Current heat texture for reading (bloom extract and lightmap). */
   getHeatTex(): WebGLTexture {
     return this.heatReadTex;
+  }
+
+  /** True when radioactive fallout heat is non-zero anywhere on the map. */
+  get isHeatActive(): boolean {
+    return this.heatActive;
   }
 
   /**

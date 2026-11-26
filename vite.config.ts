@@ -1,3 +1,8 @@
+import {
+  type AssetManifest,
+  buildAssetUrl,
+} from "@openfront/shared/AssetPaths";
+import { rewriteAssetsForCdn } from "@openfront/shared/AssetUrls";
 import tailwindcss from "@tailwindcss/vite";
 import fs from "fs";
 import http from "http";
@@ -13,11 +18,6 @@ import {
 } from "vite";
 import { createHtmlPlugin } from "vite-plugin-html";
 import { configDefaults } from "vitest/config";
-import {
-  type AssetManifest,
-  buildAssetUrl,
-  rewriteAssetsForCdn,
-} from "./src/core/AssetUrls";
 import {
   buildPublicAssetManifest,
   copyRootPublicFiles,
@@ -57,6 +57,77 @@ function quietResourcesImportWarnings(): Logger {
     if (!isResourcesImportWarning(msg)) warnOnce(msg, options);
   };
   return logger;
+}
+
+const clientForksTests = [
+  "tests/client/ApexNavigation.test.ts",
+  "tests/client/AppleSignIn.test.ts",
+  "tests/client/Auth.desktopLogin.test.ts",
+  "tests/client/Auth.steamOpenId.test.ts",
+  "tests/client/ClientEnvStatic.test.ts",
+  "tests/client/ClientGameRunnerMessages.test.ts",
+  "tests/client/CosmeticPackPurchase.test.ts",
+  "tests/client/CosmeticPurchaseDebt.test.ts",
+  "tests/client/CosmeticPurchaseInPlace.test.ts",
+  "tests/client/CreatorCodePanel.test.ts",
+  "tests/client/InlineCheckout.test.ts",
+  "tests/client/MainInitialize.test.ts",
+  "tests/client/Matchmaking.test.ts",
+  "tests/client/Platform.test.ts",
+  // Mocks Utils (translateText) for <purchase-button>, which other client
+  // files load too: in a vmThreads worker it could get a PurchaseButton
+  // another file evaluated with the real translateText.
+  "tests/client/PurchaseButtonEndScreen.test.ts",
+  "tests/client/ServerList.test.ts",
+  "tests/client/ShareLinks.test.ts",
+  "tests/client/TransportConnectionRefused.test.ts",
+  "tests/client/TransportPoolRedirect.test.ts",
+  "tests/client/TransportReconnect.test.ts",
+  "tests/client/TransportTurnstileFallback.test.ts",
+  "tests/client/UsernameBareClaim.test.ts",
+  "tests/client/UsernameClaimPrefill.test.ts",
+  "tests/client/graphics/layers/WinModal.test.ts",
+  "tests/client/poki/PokiSDK.test.ts",
+];
+
+// Percent of en.json's strings each language file translates, keyed by
+// language code. The modal can't measure this itself: it only fetches the
+// language the player picks.
+function langCoverage(langDir: string): Record<string, number> {
+  const flatten = (
+    obj: object,
+    prefix = "",
+    out = new Map<string, unknown>(),
+  ) => {
+    for (const [key, value] of Object.entries(obj)) {
+      const full = prefix ? `${prefix}.${key}` : key;
+      if (value !== null && typeof value === "object")
+        flatten(value, full, out);
+      else out.set(full, value);
+    }
+    return out;
+  };
+  const read = (file: string) =>
+    flatten(JSON.parse(fs.readFileSync(path.join(langDir, file), "utf8")));
+  const englishKeys = [...read("en.json").keys()];
+  const coverage: Record<string, number> = {};
+  for (const file of fs.readdirSync(langDir)) {
+    if (
+      !file.endsWith(".json") ||
+      file === "en.json" ||
+      file === "metadata.json"
+    )
+      continue;
+    const lang = read(file);
+    const translated = englishKeys.filter((key) => {
+      const value = lang.get(key);
+      return typeof value === "string" && value !== "";
+    }).length;
+    coverage[file.slice(0, -".json".length)] = Math.floor(
+      (100 * translated) / englishKeys.length,
+    );
+  }
+  return coverage;
 }
 
 // Dev-only: resources/public/ is served at the site root, as the build copies
@@ -268,8 +339,13 @@ export default defineConfig(({ mode }) => {
     instanceId: JSON.stringify(env.INSTANCE_ID ?? "DEV_ID"),
     manifestHref: buildAssetUrl("manifest.json", assetManifest, cdnBase),
     faviconHref: buildAssetUrl("images/Favicon.svg", assetManifest, cdnBase),
+    appleTouchIconHref: buildAssetUrl(
+      "icons/icon512_maskable.png",
+      assetManifest,
+      cdnBase,
+    ),
     gameplayScreenshotUrl: buildAssetUrl(
-      "images/GameplayScreenshot.png",
+      "images/KeyArt.jpg",
       assetManifest,
       cdnBase,
     ),
@@ -326,7 +402,10 @@ export default defineConfig(({ mode }) => {
     },
   });
 
-  // In dev, redirect visits to /w*/game/* to "/" so Vite serves the index.html.
+  // In dev, redirect visits to /w*/game/* and /w*/player/* to "/" so Vite
+  // serves the index.html. Only the /w<n> proxies below call this: a bare
+  // /player/<id> isn't proxied, so Vite's SPA fallback serves it the
+  // index.html already, as the master's fallback does in production.
   const devGameHtmlBypass = (req?: {
     url?: string;
     method?: string;
@@ -339,7 +418,7 @@ export default defineConfig(({ mode }) => {
       : (accept ?? "");
     if (!acceptValue.includes("text/html")) return undefined;
     if (!req.url) return undefined;
-    if (/^\/w\d+\/game\/[^/]+/.test(req.url)) {
+    if (/^\/w\d+\/(?:game|player)\/[^/]+/.test(req.url)) {
       return "/";
     }
     return undefined;
@@ -348,7 +427,6 @@ export default defineConfig(({ mode }) => {
   return {
     test: {
       globals: true,
-      environment: "jsdom",
       setupFiles: "./tests/setup.ts",
       // Node 25 turned Web Storage on by default, where `localStorage` is a
       // built-in global that evaluates to undefined unless --localstorage-file
@@ -370,6 +448,49 @@ export default defineConfig(({ mode }) => {
         ...configDefaults.exclude,
         "**/.worktrees/**",
         "**/.claude/worktrees/**",
+      ],
+      // Starting jsdom costs every file ~0.5s, more than many of them spend
+      // running tests, so only the client tests get it. A test elsewhere that
+      // needs a DOM opts in with a `// @vitest-environment jsdom` first line.
+      // vmThreads keeps jsdom loaded across files instead of importing it again
+      // in a fresh process for each one. Its window is the real jsdom window,
+      // though, whose location, top and window can't be redefined and whose
+      // crypto has no subtle, so tests that need those stay on the default pool.
+      projects: [
+        {
+          extends: true,
+          test: {
+            name: "client",
+            environment: "jsdom",
+            pool: "vmThreads",
+            include: ["tests/client/**/*.test.ts"],
+            exclude: clientForksTests,
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: "client-forks",
+            environment: "jsdom",
+            include: clientForksTests,
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: "node",
+            environment: "node",
+            exclude: ["tests/client/**", "tests/perf/**"],
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: "perf",
+            environment: "node",
+            include: ["tests/perf/**/*.test.ts"],
+          },
+        },
       ],
     },
     root: "./",
@@ -436,6 +557,9 @@ export default defineConfig(({ mode }) => {
       __ASSET_MANIFEST__: JSON.stringify(assetManifest),
       // openfront-light: see src/client/utilities/EnabledMaps.ts.
       __ENABLED_MAPS__: JSON.stringify(enabledMaps),
+      __LANG_COVERAGE__: JSON.stringify(
+        langCoverage(path.join(resourcesDir, "lang")),
+      ),
       "process.env.WEBSOCKET_URL": JSON.stringify(
         isProduction ? "" : "localhost:3000",
       ),
@@ -455,11 +579,22 @@ export default defineConfig(({ mode }) => {
       assetsDir: "assets", // Sub-directory for assets
       rollupOptions: {
         output: {
-          manualChunks: (id) => {
-            const vendorModules = ["howler", "zod"];
-            if (vendorModules.some((module) => id.includes(module))) {
-              return "vendor";
-            }
+          codeSplitting: {
+            groups: [
+              {
+                name: "vendor",
+                test: (id) =>
+                  ["howler", "zod"].some((module) => id.includes(module)),
+                priority: 2,
+              },
+              // Everything the page needs at startup stays in the entry
+              // chunk. Without this, a module shared by the entry and the
+              // lazily loaded screens (Lit, translateText, the cosmetics
+              // catalog, ...) can be split into chunks of its own, each one
+              // more request before the page can start, for no saving: the
+              // entry needs them all anyway.
+              { name: "index", tags: ["$initial"], priority: 1 },
+            ],
           },
         },
       },
@@ -467,6 +602,7 @@ export default defineConfig(({ mode }) => {
 
     server: {
       port: 9000,
+      strictPort: true,
       host: process.env.VITE_HOST === "lan",
       // Automatically open the browser when the server starts
       open: process.env.SKIP_BROWSER_OPEN !== "true",

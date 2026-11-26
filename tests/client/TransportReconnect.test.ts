@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, Mock, vi } from "vitest";
-import { CloseCode, CloseReason } from "../../src/core/CloseCodes";
-import { EventBus } from "../../src/core/EventBus";
-import { ServerMessage } from "../../src/core/Schemas";
+import { CloseCode, CloseReason } from "@openfront/shared/CloseCodes";
+import { EventBus } from "@openfront/shared/EventBus";
+import { ServerMessage } from "@openfront/shared/WireSchemas";
 import {
   decodeClientMessage,
   encodeServerMessage,
-} from "../../src/core/ZbinWire";
+} from "@openfront/shared/ZbinWire";
+import { afterEach, beforeEach, describe, expect, it, Mock, vi } from "vitest";
 import { testGameConfig } from "../util/Wire";
 
 // Transport's reconnect policy against a scripted WebSocket: which close
@@ -40,10 +40,14 @@ vi.mock("../../src/client/Utils", () => ({
   translateText: (key: string, params?: Record<string, unknown>) =>
     params === undefined ? key : `${key} ${JSON.stringify(params)}`,
   homeHref: () => "/",
+  exitGame: vi.fn(() => {
+    window.location.href = "/";
+  }),
 }));
 
 import type { LobbyConfig } from "../../src/client/ClientGameRunner";
-import { SendSpectateEvent, Transport } from "../../src/client/Transport";
+import { SendSpectateEvent } from "../../src/client/LobbyEvents";
+import { Transport } from "../../src/client/Transport";
 
 type Script = (ws: FakeWebSocket) => void;
 

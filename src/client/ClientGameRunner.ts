@@ -1,41 +1,49 @@
-import { Config } from "src/core/configuration/Config";
-import { ClientEnv } from "../client/ClientEnv";
-import { reloadForUpdate, translateText } from "../client/Utils";
-import { EventBus } from "../core/EventBus";
-import {
-  ClientID,
-  GameID,
-  GameRecord,
-  GameStartInfo,
-  GroupTokenEvent,
-  LobbyInfoEvent,
-  PlayerCosmeticRefs,
-  ServerMessage,
-} from "../core/Schemas";
-import { findClosestBy, replacer } from "../core/Util";
+import { TileRef } from "@openfront/engine-api/game/GameMap";
 import {
   BuildableUnit,
   PlayerType,
   Structures,
   UnitType,
-} from "../core/game/Game";
-import { TileRef } from "../core/game/GameMap";
-import { GameMapLoader } from "../core/game/GameMapLoader";
+} from "@openfront/engine-api/game/GameTypes";
 import {
   ErrorUpdate,
   GameUpdateType,
   GameUpdateViewData,
   HashUpdate,
-} from "../core/game/GameUpdates";
-import { loadTerrainMap, TerrainMapData } from "../core/game/TerrainMapLoader";
+} from "@openfront/engine-api/game/GameUpdates";
+import { ClientID, GameID } from "@openfront/engine-api/Schemas";
+import { Config } from "@openfront/engine-lib/configuration/Config";
+import { TerrainMapData } from "@openfront/engine-lib/game/TerrainMapLoader";
+import { findClosestBy } from "@openfront/engine-lib/Util";
 import {
-  GRAPHICS_KEY,
-  USER_SETTINGS_CHANGED_EVENT,
-  UserSettings,
-} from "../core/game/UserSettings";
-import { WorkerClient } from "../core/worker/WorkerClient";
+  EventBus,
+  type EventConstructor,
+  type GameEvent,
+} from "@openfront/shared/EventBus";
+import { GameMapLoader } from "@openfront/shared/GameMapLoader";
+import { replacer } from "@openfront/shared/SharedUtil";
+import {
+  GameRecord,
+  GroupTokenEvent,
+  LobbyInfoEvent,
+  PlayerCosmeticRefs,
+  ServerMessage,
+  WireGameStartInfo,
+} from "@openfront/shared/WireSchemas";
+import { ClientEnv } from "../client/ClientEnv";
+import { reloadForUpdate, translateText } from "../client/Utils";
+import { rememberAdmitted } from "./AdmittedLobbies";
+import { clearSavedLooks } from "./components/card/SavedLooks";
+import { MapLayerController } from "./controllers/MapLayerController";
+import { cancelPendingResume, setGameInProgress } from "./Cosmetics";
 import { isDesktopShell } from "./DesktopShell";
+import { GameHealth } from "./GameHealth";
 import { GameMetrics } from "./GameMetrics";
+import { createRenderer, GameRenderer } from "./hud/GameRenderer";
+import { GameHealthIndicators } from "./hud/layers/GameHealthIndicators";
+import { goldRateTracker } from "./hud/layers/lib/GoldRateTracker";
+import { OnboardingOverlay } from "./hud/layers/OnboardingOverlay";
+import { UnitDisplay } from "./hud/layers/UnitDisplay";
 import { showInGameAlert } from "./InGameModal";
 import {
   AutoUpgradeEvent,
@@ -44,36 +52,17 @@ import {
   DoGroundAttackEvent,
   DoRequestAllianceEvent,
   DoRetaliateAttackEvent,
+  DoTargetPlayerEvent,
   InputHandler,
   MouseMoveEvent,
   MouseUpEvent,
   TickMetricsEvent,
   ToggleRenderDebugGuiEvent,
 } from "./InputHandler";
+import { rememberLobbyPublicGameType } from "./LobbyPublicGameType";
+import { rememberLobbyRoster } from "./LobbyRosterLevels";
 import { pagePin } from "./PagePin";
 import { groupTokenOf, loggableStartMessage } from "./PresenceGroup";
-import { versionedPathForMismatchedGame } from "./ServerList";
-import { reportGameError } from "./Telemetry";
-import { terrainMapFileLoader } from "./TerrainMapFileLoader";
-import { GoToPlayerEvent } from "./TransformHandler";
-import {
-  MoveWarshipIntentEvent,
-  NewLobbyEvent,
-  SendAllianceExtensionIntentEvent,
-  SendAllianceRequestIntentEvent,
-  SendAttackIntentEvent,
-  SendBoatAttackIntentEvent,
-  SendBreakAllianceIntentEvent,
-  SendHashEvent,
-  SendSpawnIntentEvent,
-  SendUpgradeStructureIntentEvent,
-  Transport,
-} from "./Transport";
-import { createCanvas } from "./Utils";
-import { WebGLFrameBuilder } from "./WebGLFrameBuilder";
-import { MapLayerController } from "./controllers/MapLayerController";
-import { createRenderer, GameRenderer } from "./hud/GameRenderer";
-import { goldRateTracker } from "./hud/layers/lib/GoldRateTracker";
 import {
   applyGraphicsOverrides,
   createRenderSettings,
@@ -86,11 +75,42 @@ import {
   showGLGate,
   trackGLInit,
 } from "./render/gl";
-import { ALL_UNIT_TYPES, UnitState } from "./render/types";
+import { ALL_UNIT_TYPES } from "./render/types";
+import { versionedPathForMismatchedGame } from "./ServerList";
 import { audioMixer, initAudioMixer } from "./sound/AudioMixer";
 import { SoundManager } from "./sound/SoundManager";
+import { tabAttention } from "./TabAttention";
+import { reportGameError } from "./Telemetry";
+import {
+  loadCachedTerrainMap,
+  terrainMapFileLoader,
+} from "./TerrainMapFileLoader";
 import { themeProvider } from "./theme/ThemeProvider";
+import { GoToPlayerEvent } from "./TransformHandler";
+import {
+  counterAttackTroops,
+  MoveWarshipIntentEvent,
+  NewLobbyEvent,
+  SendAllianceExtensionIntentEvent,
+  SendAllianceRequestIntentEvent,
+  SendAttackIntentEvent,
+  SendBoatAttackIntentEvent,
+  SendBreakAllianceIntentEvent,
+  SendHashEvent,
+  SendSpawnIntentEvent,
+  SendTargetPlayerIntentEvent,
+  SendUpgradeStructureIntentEvent,
+  Transport,
+} from "./Transport";
+import {
+  GRAPHICS_KEY,
+  USER_SETTINGS_CHANGED_EVENT,
+  UserSettings,
+} from "./UserSettings";
+import { createCanvas } from "./Utils";
 import { GameView, PlayerView } from "./view";
+import { WebGLFrameBuilder } from "./WebGLFrameBuilder";
+import { WorkerClient } from "./WorkerClient";
 
 export interface LobbyConfig {
   cosmetics: PlayerCosmeticRefs;
@@ -103,11 +123,22 @@ export interface LobbyConfig {
   gameID: GameID;
   turnstileToken: string | null;
   // GameStartInfo only exists when playing a singleplayer game.
-  gameStartInfo?: GameStartInfo;
+  gameStartInfo?: WireGameStartInfo;
   // GameRecord exists when replaying an archived game.
   gameRecord?: GameRecord;
+  // Set when resuming a saved singleplayer game: the snapshot to restore.
+  snapshot?: Uint8Array;
   // Watch without playing.
   spectator?: boolean;
+  // Host only: the play token the lobby was created under, used for the
+  // first join so the host joins as the creator (see createLobby).
+  creatorToken?: string;
+  // Optional fallback to mint a fresh Turnstile token when an initial
+  // turnstileToken: null join is rejected for missing/failed Turnstile.
+  refreshTurnstileToken?: (signal: AbortSignal) => Promise<string | null>;
+  // Notified at most once per joinLobby session when the server admits the
+  // player while lobbyConfig.turnstileToken is non-empty.
+  onTurnstileTokenAdmitted?: () => void;
 }
 
 export interface JoinLobbyResult {
@@ -120,6 +151,8 @@ export function joinLobby(
   eventBus: EventBus,
   lobbyConfig: LobbyConfig,
 ): JoinLobbyResult {
+  // Joining a game stops a resume waiting to open the Store.
+  cancelPendingResume();
   // Mutable clientID state — assigned by server (multiplayer) or derived from gameStartInfo (singleplayer)
   let clientID: ClientID | undefined;
 
@@ -137,15 +170,34 @@ export function joinLobby(
   const transport = new Transport(lobbyConfig, eventBus);
 
   let currentGameRunner: ClientGameRunner | null = null;
+  // Set once this lobby has been left, so a load that was still pending
+  // doesn't start a runner for it.
+  let lobbyStopped = false;
+  // Set once the game starts prestarting. Main only asks for the "starting"
+  // tab flash from that point, so a handle that never got here has nothing to
+  // release (e.g. a join that was superseded while it waited for its token).
+  let prestarted = false;
+  let turnstileTokenAdmittedNotified = false;
+  const notifyTurnstileTokenAdmitted = () => {
+    if (
+      !turnstileTokenAdmittedNotified &&
+      typeof lobbyConfig.turnstileToken === "string" &&
+      lobbyConfig.turnstileToken.length > 0
+    ) {
+      turnstileTokenAdmittedNotified = true;
+      lobbyConfig.onTurnstileTokenAdmitted?.();
+    }
+  };
 
   const onconnect = async () => {
     // Drop the tag if the ownership check failed; the server re-checks anyway.
     if (lobbyConfig.clanTagCheck !== undefined) {
       lobbyConfig.playerClanTag = await lobbyConfig.clanTagCheck;
     }
+    if (lobbyStopped) return;
     // Always send join - server will detect reconnection via persistentID
     console.log(`Joining game lobby ${lobbyConfig.gameID}`);
-    transport.joinGame();
+    void transport.joinGame();
   };
   // Only begin a terrain preload once the same map has been stable across
   // this many consecutive lobby_info broadcasts (one per second). A host
@@ -167,8 +219,8 @@ export function joinLobby(
   let pendingPreloadKey: string | null = null;
   let pendingPreloadStreak = 0;
   const requestTerrainLoad = (
-    map: Parameters<typeof loadTerrainMap>[0],
-    mapSize: Parameters<typeof loadTerrainMap>[1],
+    map: Parameters<typeof loadCachedTerrainMap>[0],
+    mapSize: Parameters<typeof loadCachedTerrainMap>[1],
   ): Promise<TerrainMapData> => {
     const key = `${map}:${mapSize}`;
     const existing = terrainLoads.get(key);
@@ -176,12 +228,7 @@ export function joinLobby(
       terrainLoad = existing;
       return existing;
     }
-    const load = loadTerrainMap(
-      map,
-      mapSize,
-      terrainMapFileLoader,
-      false, // Layer images loaded off the critical path after game start.
-    );
+    const load = loadCachedTerrainMap(map, mapSize);
     terrainLoads.set(key, load);
     terrainLoad = load;
     void load.catch((e) => {
@@ -217,7 +264,20 @@ export function joinLobby(
     if (message.type === "lobby_info") {
       // Server tells us our assigned clientID
       clientID = message.myClientID;
+      rememberAdmitted(message.lobby.gameID);
+      notifyTurnstileTokenAdmitted();
       eventBus.emit(new LobbyInfoEvent(message.lobby, message.myClientID));
+      // Kept past game start for the in-game level badges.
+      rememberLobbyRoster(
+        message.lobby.gameID,
+        message.lobby.clients,
+        message.myClientID,
+      );
+      // Kept past game start for the win screen's FFA rating check.
+      rememberLobbyPublicGameType(
+        message.lobby.gameID,
+        message.lobby.publicGameType,
+      );
       // Preload the map while still in the lobby so game start can reuse the
       // cached result instead of blocking on the download in the short
       // prestart->start window. The preload is debounced: it only fires once
@@ -241,7 +301,7 @@ export function joinLobby(
           pendingPreloadStreak = 1;
         }
         if (pendingPreloadStreak >= MAP_PRELOAD_DEBOUNCE_STREAK) {
-          requestTerrainLoad(gameConfig.gameMap, gameConfig.gameMapSize);
+          void requestTerrainLoad(gameConfig.gameMap, gameConfig.gameMapSize);
         }
       }
       return;
@@ -250,11 +310,13 @@ export function joinLobby(
       console.log(
         `lobby: game prestarting: ${JSON.stringify(message, replacer)}`,
       );
-      requestTerrainLoad(message.gameMap, message.gameMapSize);
+      void requestTerrainLoad(message.gameMap, message.gameMapSize);
+      prestarted = true;
       resolvePrestart();
     }
     if (message.type === "start") {
       // Trigger prestart for singleplayer games
+      prestarted = true;
       resolvePrestart();
       // Everything in the start message EXCEPT the group token. This log is
       // the whole message verbatim and players paste it into bug reports;
@@ -268,6 +330,8 @@ export function joinLobby(
       );
       // Server tells us our assigned clientID (also sent on start for late joins)
       clientID = message.myClientID;
+      rememberAdmitted(lobbyConfig.gameID);
+      notifyTurnstileTokenAdmitted();
       resolveJoin();
       // For multiplayer games, GameStartInfo is not known until game starts.
       lobbyConfig.gameStartInfo = message.gameStartInfo;
@@ -279,15 +343,28 @@ export function joinLobby(
         userSettings,
         terrainLoad,
         terrainMapFileLoader,
+        () => lobbyStopped,
       )
         .then((r) => {
+          if (lobbyStopped) {
+            // The lobby was left while this was loading. Dispose the runner
+            // without starting it, and leave the tab flash alone: it may
+            // belong to a newer lobby by now.
+            r?.stop(false);
+            return;
+          }
+          if (!r) return;
           currentGameRunner = r;
           r.start();
         })
         .catch((e) => {
+          if (lobbyStopped) return;
           console.error("error creating client game", e);
 
           currentGameRunner = null;
+          // The game never started, so stop the "starting" tab flash, unless
+          // the lobby was already left and the flash may be a newer lobby's.
+          if (!lobbyStopped) tabAttention.release();
 
           const startingModal = document.querySelector(
             "game-starting-modal",
@@ -322,15 +399,17 @@ export function joinLobby(
           }),
         );
       } else if (message.error === "kick_reason.host_left") {
-        showInGameAlert(translateText("kick_reason.host_left")).then(() => {
-          document.dispatchEvent(
-            new CustomEvent("leave-lobby", {
-              detail: { lobby: lobbyConfig.gameID, cause: "host-left" },
-              bubbles: true,
-              composed: true,
-            }),
-          );
-        });
+        void showInGameAlert(translateText("kick_reason.host_left")).then(
+          () => {
+            document.dispatchEvent(
+              new CustomEvent("leave-lobby", {
+                detail: { lobby: lobbyConfig.gameID, cause: "host-left" },
+                bubbles: true,
+                composed: true,
+              }),
+            );
+          },
+        );
       } else if (message.error === "kick_reason.match_cancelled") {
         // A matched player never connected and the server cancelled the game
         // pre-start. Tear down the dead lobby, then put the matchmaking
@@ -396,11 +475,11 @@ export function joinLobby(
             // version's page is not being served), so say so and stop.
             void showInGameAlert(translateText("update_available.message"));
           } else {
-            showInGameAlert(translateText("update_available.message")).then(
-              () => {
-                reloadForUpdate();
-              },
-            );
+            void showInGameAlert(
+              translateText("update_available.message"),
+            ).then(() => {
+              reloadForUpdate();
+            });
           }
         }
       } else {
@@ -424,10 +503,14 @@ export function joinLobby(
         return false;
       }
       console.log("leaving game");
+      lobbyStopped = true;
       if (currentGameRunner) {
         currentGameRunner.stop();
         currentGameRunner = null;
       } else {
+        // No runner yet to release the flash. Only release if this lobby got
+        // as far as asking for one; a handle that never prestarted has none.
+        if (prestarted) tabAttention.release();
         transport.leaveGame();
       }
       return true;
@@ -634,32 +717,7 @@ function mountWebGLFrameLoop(
   const builder = new WebGLFrameBuilder(view);
 
   // When context is lost and restored, WebGL loses all textures and geometry.
-  // Force a full re-upload of the simulation state.
-  view.onContextRestored = () => {
-    builder.clearCaches();
-
-    // Full upload of terrain, territory & trail state
-    const mapSize = mapWidth * mapHeight;
-    const allTerrain = new Uint8Array(mapSize);
-    for (let i = 0; i < mapSize; i++) {
-      allTerrain[i] = gameView.terrainByte(i);
-    }
-    view.applyTerrainRects(
-      [{ x: 0, y: 0, w: mapWidth, h: mapHeight }],
-      allTerrain,
-    );
-
-    const frameData = gameView.frameData();
-    view.uploadTileAndTrailState(frameData.tileState, frameData.trailState);
-
-    // Structures, railroads and relations normally skip GPU upload unless
-    // marked dirty, now force
-    view.updateStructures(frameData.units as Map<number, UnitState>);
-    view.uploadRailroadState(frameData.railroadState);
-    view.updateRelations(frameData.relationMatrix, frameData.relationSize);
-
-    builder.update(gameView);
-  };
+  view.onContextRestored = () => builder.restoreContext(gameView);
 
   return { builder, stopFrameLoop };
 }
@@ -672,13 +730,13 @@ async function createClientGame(
   userSettings: UserSettings,
   terrainLoad: Promise<TerrainMapData> | null,
   mapLoader: GameMapLoader,
-): Promise<ClientGameRunner> {
+  isStopped?: () => boolean,
+): Promise<ClientGameRunner | undefined> {
   if (lobbyConfig.gameStartInfo === undefined) {
     throw new Error("missing gameStartInfo");
   }
   const config = new Config(
     lobbyConfig.gameStartInfo.config,
-    userSettings,
     lobbyConfig.gameRecord !== undefined,
     lobbyConfig.gameStartInfo.listed,
     lobbyConfig.spectator === true,
@@ -688,19 +746,37 @@ async function createClientGame(
   if (terrainLoad) {
     gameMap = await terrainLoad;
   } else {
-    gameMap = await loadTerrainMap(
+    gameMap = await loadCachedTerrainMap(
       lobbyConfig.gameStartInfo.config.gameMap,
       lobbyConfig.gameStartInfo.config.gameMapSize,
-      mapLoader,
-      false, // Layer images loaded off the critical path after game start.
     );
   }
+  if (isStopped?.()) return;
   // Kick off the font-atlas fetch so it overlaps with worker init; the
   // render passes need it parsed before createWebGLView runs.
   const atlasDataLoad = preloadAtlasData();
-  const worker = new WorkerClient(lobbyConfig.gameStartInfo, clientID);
-  await worker.initialize();
-  await atlasDataLoad;
+  const worker = new WorkerClient(
+    lobbyConfig.gameStartInfo,
+    clientID,
+    lobbyConfig.snapshot,
+  );
+  try {
+    await worker.initialize();
+    if (isStopped?.()) {
+      void atlasDataLoad.catch(() => {});
+      worker.cleanup();
+      return;
+    }
+    await atlasDataLoad;
+  } catch (e) {
+    void atlasDataLoad.catch(() => {});
+    worker.cleanup();
+    throw e;
+  }
+  if (isStopped?.()) {
+    worker.cleanup();
+    return;
+  }
   const gameView = new GameView(
     worker,
     config,
@@ -710,6 +786,7 @@ async function createClientGame(
     lobbyConfig.playerClanTag,
     lobbyConfig.gameStartInfo.gameID,
     lobbyConfig.gameStartInfo.players,
+    lobbyConfig.snapshot !== undefined,
   );
 
   // Transparent fullscreen overlay used purely as the pointer-event /
@@ -825,7 +902,7 @@ async function createClientGame(
       if (debugGui === null) {
         if (debugGuiLoading) return;
         debugGuiLoading = true;
-        import("./render/gl/debug/index")
+        void import("./render/gl/debug/index")
           .then(({ createDebugGui }) => {
             debugGui = createDebugGui(
               view.getSettings(),
@@ -854,9 +931,11 @@ async function createClientGame(
       lobbyConfig.playerRole,
       view,
       mapLayerController,
+      lobbyConfig.gameStartInfo.visibleAt,
     );
 
     const metrics = new GameMetrics(lobbyConfig.gameID, clientID);
+    const health = new GameHealth();
     const { builder: webglBuilder, stopFrameLoop } = mountWebGLFrameLoop(
       gameMap,
       view,
@@ -865,7 +944,10 @@ async function createClientGame(
       gameRenderer.transformHandler,
       gameView,
       eventBus,
-      (nowMs) => metrics.recordFrame(nowMs),
+      (nowMs) => {
+        metrics.recordFrame(nowMs);
+        health.recordFrame(nowMs);
+      },
     );
 
     // Releases all WebGL/DOM resources this game created. Without it, stopping
@@ -876,6 +958,7 @@ async function createClientGame(
     const disposeRenderer = (): void => {
       if (rendererDisposed) return;
       rendererDisposed = true;
+      gameRenderer.dispose();
       stopFrameLoop();
       view.dispose();
       glCanvas.remove();
@@ -886,12 +969,31 @@ async function createClientGame(
       `creating private game got difficulty: ${lobbyConfig.gameStartInfo.config.difficulty}`,
     );
 
+    const inputHandler = new InputHandler(
+      gameView,
+      gameRenderer.uiState,
+      inputOverlay,
+      eventBus,
+    );
+    const unitDisplay = document.querySelector(
+      "unit-display",
+    ) as UnitDisplay | null;
+    if (unitDisplay) {
+      unitDisplay.inputHandler = inputHandler;
+    }
+    const onboardingOverlay = document.querySelector(
+      "onboarding-overlay",
+    ) as OnboardingOverlay | null;
+    if (onboardingOverlay) {
+      onboardingOverlay.inputHandler = inputHandler;
+    }
+
     return new ClientGameRunner(
       lobbyConfig,
       clientID,
       eventBus,
       gameRenderer,
-      new InputHandler(gameView, gameRenderer.uiState, inputOverlay, eventBus),
+      inputHandler,
       transport,
       worker,
       gameView,
@@ -901,6 +1003,7 @@ async function createClientGame(
       graphicsListenerAbort,
       disposeRenderer,
       metrics,
+      health,
     );
   } catch (err) {
     soundManager.dispose();
@@ -911,16 +1014,47 @@ async function createClientGame(
 export class ClientGameRunner {
   private myPlayer: PlayerView | null = null;
   private isActive = false;
+  private hasStarted = false;
+  private isStopped = false;
 
   private turnsSeen = 0;
+  // True from a (re)join request until the server's start message answers it.
+  // Live turns that land in that window arrive ahead of turnsSeen and are
+  // dropped; the start message replays them, so dropping them is expected.
+  private awaitingStart = true;
   private lastMousePosition: { x: number; y: number } | null = null;
 
   private lastMessageTime: number = 0;
+  private connectionCheckTimeout: ReturnType<typeof setTimeout> | null = null;
   private connectionCheckInterval: NodeJS.Timeout | null = null;
   private goToPlayerTimeout: NodeJS.Timeout | null = null;
+  private eventUnsubscribers: Array<() => void> = [];
 
   private lastTickReceiveTime: number = 0;
   private currentTickDelay: number | undefined = undefined;
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private healthPaused = false;
+  private healthIndicators: GameHealthIndicators | null = null;
+
+  private updateHealth = (): void => {
+    const status = this.health.update(performance.now(), {
+      catchingUp:
+        !this.gameView.config().isReplay() && this.gameView.isCatchingUp(),
+      paused: this.healthPaused,
+      hidden: document.hidden,
+      networkEnabled:
+        !this.transport.isLocal && !this.gameView.config().isReplay(),
+      active: this.isActive && !this.awaitingStart,
+    });
+    const indicators = this.healthIndicators;
+    if (
+      indicators &&
+      (indicators.status.highLatency !== status.highLatency ||
+        indicators.status.connectionUnstable !== status.connectionUnstable ||
+        indicators.status.performance !== status.performance)
+    )
+      indicators.status = { ...status };
+  };
 
   constructor(
     private lobby: LobbyConfig,
@@ -937,6 +1071,7 @@ export class ClientGameRunner {
     private graphicsListenerAbort: AbortController | null = null,
     private disposeRenderer: (() => void) | null = null,
     private metrics: GameMetrics | null = null,
+    private health: GameHealth = new GameHealth(),
   ) {
     this.lastMessageTime = Date.now();
   }
@@ -956,43 +1091,54 @@ export class ClientGameRunner {
     return !!this.myPlayer?.isAlive();
   }
 
+  private onBus<T extends GameEvent>(
+    eventType: EventConstructor<T>,
+    handler: (event: T) => void,
+  ): void {
+    this.eventBus.on(eventType, handler);
+    this.eventUnsubscribers.push(() => this.eventBus.off(eventType, handler));
+  }
+
   public start() {
+    if (this.hasStarted || this.isActive || this.isStopped) return;
+    this.hasStarted = true;
+    // A resume waiting for a top-up's Plutonium never opens the Store now.
+    setGameInProgress(true);
+
     this.soundManager.playBackgroundMusic();
     console.log("starting client game");
 
     this.isActive = true;
     this.lastMessageTime = Date.now();
     this.metrics?.start();
-    setTimeout(() => {
+    this.health.reset(performance.now());
+    this.healthPaused = false;
+    this.healthIndicators = new GameHealthIndicators();
+    document.body.append(this.healthIndicators);
+    this.healthTimer = setInterval(this.updateHealth, 250);
+    document.addEventListener("visibilitychange", this.updateHealth);
+    this.updateHealth();
+    this.connectionCheckTimeout = setTimeout(() => {
+      this.connectionCheckTimeout = null;
       this.connectionCheckInterval = setInterval(
         () => this.onConnectionCheck(),
         1000,
       );
     }, 20000);
 
-    this.eventBus.on(MouseUpEvent, this.inputEvent.bind(this));
-    this.eventBus.on(MouseMoveEvent, this.onMouseMove.bind(this));
-    this.eventBus.on(AutoUpgradeEvent, this.autoUpgradeEvent.bind(this));
-    this.eventBus.on(
-      DoBoatAttackEvent,
-      this.doBoatAttackUnderCursor.bind(this),
+    this.onBus(MouseUpEvent, (e) => this.inputEvent(e));
+    this.onBus(MouseMoveEvent, (e) => this.onMouseMove(e));
+    this.onBus(AutoUpgradeEvent, (e) => this.autoUpgradeEvent(e));
+    this.onBus(DoBoatAttackEvent, (e) => this.doBoatAttackUnderCursor(e));
+    this.onBus(DoGroundAttackEvent, () => this.doGroundAttackUnderCursor());
+    this.onBus(DoRetaliateAttackEvent, () =>
+      this.doRetaliateAttackMostRecent(),
     );
-    this.eventBus.on(
-      DoGroundAttackEvent,
-      this.doGroundAttackUnderCursor.bind(this),
+    this.onBus(DoRequestAllianceEvent, (e) =>
+      this.doRequestAllianceUnderCursor(e),
     );
-    this.eventBus.on(
-      DoRetaliateAttackEvent,
-      this.doRetaliateAttackMostRecent.bind(this),
-    );
-    this.eventBus.on(
-      DoRequestAllianceEvent,
-      this.doRequestAllianceUnderCursor.bind(this),
-    );
-    this.eventBus.on(
-      DoBreakAllianceEvent,
-      this.doBreakAllianceUnderCursor.bind(this),
-    );
+    this.onBus(DoBreakAllianceEvent, (e) => this.doBreakAllianceUnderCursor(e));
+    this.onBus(DoTargetPlayerEvent, (e) => this.doTargetPlayerUnderCursor(e));
 
     this.renderer.initialize();
     this.input.initialize();
@@ -1016,8 +1162,14 @@ export class ClientGameRunner {
         this.eventBus.emit(new SendHashEvent(hu.tick, hu.hash));
       });
       this.gameView.update(gu);
+      const pauseUpdates = gu.updates[GameUpdateType.GamePaused];
+      if (pauseUpdates?.length) {
+        this.healthPaused = pauseUpdates[pauseUpdates.length - 1].paused;
+      }
+      this.updateHealth();
       this.webglBuilder?.update(this.gameView);
       this.renderer.tick();
+      this.updateTabAttention();
       if (gu.tickExecutionDuration !== undefined) {
         this.metrics?.recordTickExecution(gu.tickExecutionDuration);
       }
@@ -1033,7 +1185,9 @@ export class ClientGameRunner {
 
     const onconnect = () => {
       console.log("Connected to game server!");
-      this.transport.rejoinGame(this.turnsSeen);
+      this.awaitingStart = true;
+      this.updateHealth();
+      void this.transport.rejoinGame(this.turnsSeen);
     };
 
     let hasGoneToPlayer = false;
@@ -1041,6 +1195,9 @@ export class ClientGameRunner {
       this.lastMessageTime = Date.now();
       if (message.type === "start") {
         console.log("starting game! in client game runner");
+        this.awaitingStart = false;
+        this.health.recordTurn(performance.now());
+        this.updateHealth();
 
         if (this.gameView.config().isRandomSpawn()) {
           const goToPlayer = () => {
@@ -1115,9 +1272,12 @@ export class ClientGameRunner {
         );
       }
       if (message.type === "pong") {
-        this.metrics?.recordRoundTrip(
-          Math.floor(performance.now()) - message.sentAt,
-        );
+        const now = performance.now();
+        const roundTrip = Math.floor(now) - message.sentAt;
+        this.metrics?.recordRoundTrip(roundTrip);
+        this.updateHealth();
+        this.health.recordRoundTrip(roundTrip, now);
+        this.updateHealth();
       }
       if (message.type === "new_lobby") {
         // The host reused this private lobby: surface the successor id so the
@@ -1126,6 +1286,7 @@ export class ClientGameRunner {
         this.eventBus.emit(new NewLobbyEvent(message.gameID));
       }
       if (message.type === "turn") {
+        this.health.recordTurn(performance.now());
         if (
           !this.gameView.inSpawnPhase() &&
           !hasGoneToPlayer &&
@@ -1149,7 +1310,9 @@ export class ClientGameRunner {
         this.lastTickReceiveTime = now;
 
         if (this.turnsSeen !== message.turn.turnNumber) {
-          console.error(
+          // Expected while the start message is still on its way (every
+          // multiplayer game start hits this); an error once it has arrived.
+          (this.awaitingStart ? console.debug : console.error)(
             `got wrong turn have turns ${this.turnsSeen}, received turn ${message.turn.turnNumber}`,
           );
         } else {
@@ -1171,10 +1334,58 @@ export class ClientGameRunner {
     this.transport.updateCallback(onconnect, onmessage);
     console.log("sending join game");
     // Rejoin game from the start so we don't miss any turns.
-    this.transport.rejoinGame(0);
+    void this.transport.rejoinGame(0);
   }
 
-  public stop() {
+  // Flash the tab while the player still has to pick a spawn and has switched
+  // to another tab; the flashing ends once they spawn or the phase is over.
+  private updateTabAttention(): void {
+    const config = this.gameView.config();
+    const canPickSpawn =
+      this.gameView.inSpawnPhase() &&
+      !config.isRandomSpawn() &&
+      !config.isReplay() &&
+      !config.isIntentionalSpectator();
+    if (!canPickSpawn) {
+      tabAttention.release();
+      return;
+    }
+    const me = this.gameView.myPlayer();
+    // Before the player shows up in the view, leave any "starting" flash alone.
+    if (me === null) return;
+    if (me.hasSpawned()) {
+      tabAttention.release();
+    } else {
+      tabAttention.request("spawn");
+    }
+  }
+
+  // releaseTabAttention is false when disposing a runner for a lobby that was
+  // already left: its flash (if any) isn't this runner's to clear anymore.
+  public stop(releaseTabAttention: boolean = true) {
+    this.isStopped = true;
+    if (releaseTabAttention) {
+      tabAttention.release();
+      // Looks saved from the player panel belong to this game. A runner
+      // disposed for a lobby already left skips this: a newer game may be
+      // running by now.
+      clearSavedLooks();
+      setGameInProgress(false);
+    }
+    if (this.healthTimer !== null) clearInterval(this.healthTimer);
+    this.healthTimer = null;
+    if (this.connectionCheckTimeout !== null) {
+      clearTimeout(this.connectionCheckTimeout);
+      this.connectionCheckTimeout = null;
+    }
+    for (const unsub of this.eventUnsubscribers) {
+      unsub();
+    }
+    this.eventUnsubscribers = [];
+    document.removeEventListener("visibilitychange", this.updateHealth);
+    this.healthIndicators?.remove();
+    this.healthIndicators = null;
+    this.health.reset(performance.now());
     this.soundManager.dispose();
     this.graphicsListenerAbort?.abort();
     // Detach the input handler's window/canvas listeners and its EventBus
@@ -1185,11 +1396,13 @@ export class ClientGameRunner {
     // disposals around it.
     this.input.destroy();
     this.disposeRenderer?.();
+    // Terminate the worker even if the runner never started (a lobby left while
+    // it was loading), otherwise nothing else would ever stop it. Idempotent.
+    this.worker.cleanup();
     if (!this.isActive) return;
 
     this.isActive = false;
     this.metrics?.stop();
-    this.worker.cleanup();
     this.transport.leaveGame();
     if (this.connectionCheckInterval) {
       clearInterval(this.connectionCheckInterval);
@@ -1361,8 +1574,8 @@ export class ClientGameRunner {
       });
   }
 
-  private doBoatAttackUnderCursor(): void {
-    const tile = this.getTileUnderCursor();
+  private doBoatAttackUnderCursor(e: DoBoatAttackEvent): void {
+    const tile = this.actionTile(e.tile);
     if (tile === null) {
       return;
     }
@@ -1384,6 +1597,9 @@ export class ClientGameRunner {
             "Boat attack triggered but can't send Transport Ship to tile",
           );
         }
+      })
+      .catch((error) => {
+        console.warn("Failed to check boat attack actions:", error);
       });
   }
 
@@ -1445,15 +1661,15 @@ export class ClientGameRunner {
     ) as PlayerView;
     if (!attacker) return;
 
-    const counterTroops = Math.min(
+    const counterTroops = counterAttackTroops(
       mostRecentAttack.troops,
       this.renderer.uiState.attackRatio * this.myPlayer.troops(),
     );
     this.eventBus.emit(new SendAttackIntentEvent(attacker.id(), counterTroops));
   }
 
-  private doRequestAllianceUnderCursor(): void {
-    const tile = this.getTileUnderCursor();
+  private doRequestAllianceUnderCursor(e: DoRequestAllianceEvent): void {
+    const tile = this.actionTile(e.tile);
     if (tile === null) return;
 
     if (this.myPlayer === null) {
@@ -1467,6 +1683,7 @@ export class ClientGameRunner {
 
     const tileOwner = this.gameView.owner(tile);
     if (!tileOwner.isPlayer()) return;
+    if (e.playerID !== undefined && tileOwner.id() !== e.playerID) return;
     const recipient = tileOwner as PlayerView;
 
     myPlayer
@@ -1485,8 +1702,8 @@ export class ClientGameRunner {
       });
   }
 
-  private doBreakAllianceUnderCursor(): void {
-    const tile = this.getTileUnderCursor();
+  private doBreakAllianceUnderCursor(e: DoBreakAllianceEvent): void {
+    const tile = this.actionTile(e.tile);
     if (tile === null) return;
 
     if (this.myPlayer === null) {
@@ -1500,6 +1717,7 @@ export class ClientGameRunner {
 
     const tileOwner = this.gameView.owner(tile);
     if (!tileOwner.isPlayer()) return;
+    if (e.playerID !== undefined && tileOwner.id() !== e.playerID) return;
     const recipient = tileOwner as PlayerView;
 
     myPlayer
@@ -1514,6 +1732,42 @@ export class ClientGameRunner {
       .catch((error) => {
         console.warn("Failed to check alliance actions:", error);
       });
+  }
+
+  private doTargetPlayerUnderCursor(e: DoTargetPlayerEvent): void {
+    const tile = this.actionTile(e.tile);
+    if (tile === null) return;
+
+    if (this.myPlayer === null) {
+      if (!this.clientID) return;
+      const myPlayer = this.gameView.playerByClientID(this.clientID);
+      if (myPlayer === null) return;
+      this.myPlayer = myPlayer;
+    }
+
+    const tileOwner = this.gameView.owner(tile);
+    if (!tileOwner.isPlayer()) return;
+    if (e.playerID !== undefined && tileOwner.id() !== e.playerID) return;
+    const target = tileOwner as PlayerView;
+
+    this.myPlayer
+      .actions(tile)
+      .then((actions) => {
+        if (actions.interaction?.canTarget) {
+          this.eventBus.emit(new SendTargetPlayerIntentEvent(target.id()));
+        }
+      })
+      .catch((error) => {
+        console.warn("Failed to check target actions:", error);
+      });
+  }
+
+  // The tile a player action event names (a panel button), or else the one
+  // under the cursor (a keybind).
+  private actionTile(tile: TileRef | undefined): TileRef | null {
+    if (tile === undefined) return this.getTileUnderCursor();
+    if (!this.isActive || this.gameView.inSpawnPhase()) return null;
+    return tile;
   }
 
   private getTileUnderCursor(): TileRef | null {

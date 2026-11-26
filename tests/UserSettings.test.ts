@@ -1,7 +1,9 @@
+// @vitest-environment jsdom
 import {
   ACTIVE_LOADOUT_KEY,
   CROWN_KEY,
   EFFECTS_KEY,
+  FAVORITE_EMOJIS_KEY,
   FLAG_KEY,
   LOADOUTS_KEY,
   MAX_LOADOUTS,
@@ -11,7 +13,8 @@ import {
   USER_SETTINGS_CHANGED_EVENT,
   UserSettings,
   getDefaultKeybinds,
-} from "../src/core/game/UserSettings";
+  keysMayBeShared,
+} from "../src/client/UserSettings";
 
 // UserSettings keeps a static in-memory cache and the active player id; reset
 // both so each test reads fresh from the (cleared) localStorage as logged out.
@@ -24,6 +27,26 @@ function resetUserSettingsState() {
   statics.cache.clear();
   statics.playerId = null;
 }
+
+describe("UserSettings random name style", () => {
+  beforeEach(resetUserSettingsState);
+
+  it("defaults to Anon, including for an unknown stored style", () => {
+    expect(new UserSettings().randomNameStyle()).toBe("anon");
+    resetUserSettingsState();
+    localStorage.setItem("settings.randomNameStyle", "unknown");
+    expect(new UserSettings().randomNameStyle()).toBe("anon");
+  });
+
+  it("persists both choices across settings instances", () => {
+    const settings = new UserSettings();
+    for (const style of ["tribe", "anon"] as const) {
+      settings.setRandomNameStyle(style);
+      expect(new UserSettings().randomNameStyle()).toBe(style);
+      expect(localStorage.getItem("settings.randomNameStyle")).toBe(style);
+    }
+  });
+});
 
 describe("UserSettings effect selection", () => {
   beforeEach(resetUserSettingsState);
@@ -191,20 +214,38 @@ describe("UserSettings cosmetic loadouts", () => {
     expect(s.getLoadouts()).toHaveLength(MAX_LOADOUTS);
   });
 
-  it("mirrors later equip changes into the active slot", () => {
+  it("equip changes change the look only, never the active slot", () => {
     const s = new UserSettings();
-    s.addLoadout();
+    s.addLoadout(); // 01: nothing equipped, active
+    s.setSelectedPatternName("pattern:stripes:red");
     s.setSelectedCrownName("owned_crown");
-    expect(s.getLoadout("01")?.crown).toBe("owned_crown");
     s.setFlag("flag:owned_flag");
     s.setSelectedEffectName("transportShipTrail", "spectrum");
     expect(s.getLoadout("01")).toMatchObject({
-      crown: "owned_crown",
-      flag: "flag:owned_flag",
-      effects: { transportShipTrail: "spectrum" },
+      pattern: null,
+      crown: null,
+      flag: null,
+      effects: {},
     });
+    expect(s.getActiveLoadout()).toBe("01");
+    // Saving is an explicit step.
+    s.saveLoadout("01");
     s.clearFlag(true);
-    expect(s.getLoadout("01")?.flag).toBeNull();
+    expect(s.getLoadout("01")?.flag).toBe("flag:owned_flag");
+  });
+
+  it("keeps an unsaved look across a reload, and the slot as it was saved", () => {
+    const s = new UserSettings();
+    s.addLoadout();
+    s.setSelectedCrownName("owned_crown");
+    // A reload starts from storage, not the in-memory cache.
+    (
+      UserSettings as unknown as { cache: Map<string, string | null> }
+    ).cache.clear();
+    const reloaded = new UserSettings();
+    expect(reloaded.getSelectedCrownName()).toBe("owned_crown");
+    expect(reloaded.getActiveLoadout()).toBe("01");
+    expect(reloaded.getLoadout("01")?.crown).toBeNull();
   });
 
   it("leaves saved slots alone when none is active", () => {
@@ -220,8 +261,6 @@ describe("UserSettings cosmetic loadouts", () => {
     const s = new UserSettings();
     equipSample(s);
     s.addLoadout(); // 01 holds the sample
-    // Step off 01 first: while it is active it mirrors the undressing below.
-    s.setActiveLoadout(null);
     s.unequipAll();
     s.addLoadout(); // 02 holds nothing
 
@@ -231,7 +270,7 @@ describe("UserSettings cosmetic loadouts", () => {
     expect(s.getFlag()).toBe("flag:owned_flag");
     expect(s.getSelectedCrownName()).toBe("owned_crown");
     expect(s.getSelectedEffects()).toEqual({ transportShipTrail: "spectrum" });
-    // 02 was active while 01 was applied; it must not have absorbed the change.
+    // 02 was active while 01 was applied; it must not have taken the change.
     expect(s.getLoadout("02")).toMatchObject({ crown: null, flag: null });
 
     expect(s.applyLoadout("02")).toBe(true);
@@ -274,7 +313,7 @@ describe("UserSettings cosmetic loadouts", () => {
     expect(s.getLoadout("01")?.crown).toBeNull();
   });
 
-  it("unequipAll clears every slot and empties the active loadout with it", () => {
+  it("unequipAll clears every slot and leaves the active loadout as saved", () => {
     const s = new UserSettings();
     equipSample(s);
     s.addLoadout();
@@ -284,10 +323,10 @@ describe("UserSettings cosmetic loadouts", () => {
     expect(s.getSelectedCrownName()).toBeNull();
     expect(s.getSelectedEffects()).toEqual({});
     expect(s.getLoadout("01")).toMatchObject({
-      pattern: null,
-      flag: null,
-      crown: null,
-      effects: {},
+      pattern: "pattern:stripes:red",
+      flag: "flag:owned_flag",
+      crown: "owned_crown",
+      effects: { transportShipTrail: "spectrum" },
     });
   });
 
@@ -355,9 +394,8 @@ describe("UserSettings stats columns", () => {
   beforeEach(resetUserSettingsState);
 
   it("returns defaults when nothing is stored", () => {
-    // The player table opens with the clan tag shown; a team has no tag.
+    // The clan column is opt-in, so both tables open with the same stats.
     expect(new UserSettings().statsColumns("player")).toEqual([
-      "clan",
       "tiles",
       "gold",
       "maxtroops",
@@ -395,7 +433,6 @@ describe("UserSettings stats columns", () => {
   it("falls back to defaults on corrupt JSON", () => {
     localStorage.setItem(PLAYER_STATS_COLUMNS_KEY, "not json");
     expect(new UserSettings().statsColumns("player")).toEqual([
-      "clan",
       "tiles",
       "gold",
       "maxtroops",
@@ -405,7 +442,6 @@ describe("UserSettings stats columns", () => {
   it("falls back to defaults when no valid ids remain", () => {
     localStorage.setItem(PLAYER_STATS_COLUMNS_KEY, JSON.stringify(["bogus"]));
     expect(new UserSettings().statsColumns("player")).toEqual([
-      "clan",
       "tiles",
       "gold",
       "maxtroops",
@@ -591,8 +627,42 @@ describe("getDefaultKeybinds", () => {
     const keybinds = getDefaultKeybinds(false);
     expect(keybinds.boxSelectWarships).toBe("ShiftLeft");
     expect(keybinds.resetGfx).toBe("KeyR");
-    expect(keybinds.selectAllWarships).toBe("KeyF");
+    expect(keybinds.performanceOverlay).toBe("Shift+KeyD");
+    expect(keybinds.selectAllWarships).toBe("KeyX");
+    expect(keybinds.emojiMenu).toBe("KeyF");
+    expect(keybinds.quickChat).toBe("KeyR");
+    expect(keybinds.playerPanel).toBe("KeyI");
+    expect(keybinds.targetPlayer).toBe("KeyN");
     expect(keybinds.buildMenuModifier).toBe("ControlLeft");
+    expect(keybinds.moveUpArrow).toBe("ArrowUp");
+    expect(keybinds.moveLeftArrow).toBe("ArrowLeft");
+    expect(keybinds.moveDownArrow).toBe("ArrowDown");
+    expect(keybinds.moveRightArrow).toBe("ArrowRight");
+    expect(keybinds.zoomOutMinus).toBe("Minus");
+    expect(keybinds.zoomOutNumpad).toBe("NumpadSubtract");
+    expect(keybinds.zoomInEqual).toBe("Equal");
+    expect(keybinds.zoomInNumpad).toBe("NumpadAdd");
+  });
+
+  it("never gives two actions the same letter key, except shared pairs", () => {
+    const binds = Object.entries(getDefaultKeybinds(false)).filter(([, k]) =>
+      /^Key[A-Z]$/.test(k),
+    );
+    for (const [a, keyA] of binds) {
+      for (const [b, keyB] of binds) {
+        if (a !== b && keyA === keyB) {
+          expect(keysMayBeShared(a, b), `${a} and ${b}`).toBe(true);
+        }
+      }
+    }
+    const keybinds = getDefaultKeybinds(false);
+    expect(keybinds.buildScrollModifier).toBe("AltLeft");
+    expect(keybinds.emojiMenuModifier).toBe("AltLeft");
+    // Note: this is related to user_setting.graphics_refresh_modifier, not the actual alt key.
+    expect(keybinds.altKey).toBe("AltLeft");
+    const sharedModifierPair = ["buildScrollModifier", "altKey"] as const;
+    expect(keysMayBeShared(...sharedModifierPair, "AltRight")).toBe(true);
+    expect(keysMayBeShared(...sharedModifierPair, "ShiftRight")).toBe(false);
   });
 
   it("handles Mac-specific modifier keys correctly", () => {
@@ -614,5 +684,115 @@ describe("UserSettings audio volumes", () => {
 
     localStorage.setItem("settings.backgroundMusicVolume", "-1");
     expect(new UserSettings().audioVolume("music")).toBe(0);
+  });
+});
+
+describe("UserSettings replay viewer", () => {
+  beforeEach(resetUserSettingsState);
+
+  it("is on by default, and remembers being turned off", () => {
+    expect(new UserSettings().replayViewer()).toBe(true);
+    new UserSettings().setReplayViewer(false);
+    expect(new UserSettings().replayViewer()).toBe(false);
+    new UserSettings().setReplayViewer(true);
+    expect(new UserSettings().replayViewer()).toBe(true);
+  });
+});
+
+describe("UserSettings favorite emojis", () => {
+  beforeEach(resetUserSettingsState);
+
+  it("has no favorites by default", () => {
+    expect(new UserSettings().favoriteEmojis()).toEqual([]);
+  });
+
+  it("round-trips slots, keeping empty ones in place", () => {
+    new UserSettings().setFavoriteEmojis(["👍", null, "💀"]);
+    expect(new UserSettings().favoriteEmojis()).toEqual(["👍", null, "💀"]);
+  });
+
+  it("reads unknown emojis as empty slots and corrupt storage as none", () => {
+    localStorage.setItem(FAVORITE_EMOJIS_KEY, JSON.stringify(["🍕", "👍"]));
+    expect(new UserSettings().favoriteEmojis()).toEqual([null, "👍"]);
+
+    resetUserSettingsState();
+    localStorage.setItem(FAVORITE_EMOJIS_KEY, "not json");
+    expect(new UserSettings().favoriteEmojis()).toEqual([]);
+  });
+});
+
+describe("UserSettings keybinds with new defaults", () => {
+  beforeEach(resetUserSettingsState);
+
+  const store = (binds: Record<string, unknown>) =>
+    localStorage.setItem("settings.keybinds", JSON.stringify(binds));
+
+  it("unbinds a default that lands on a key the player already uses", () => {
+    store({ boatAttack: { value: "KeyX", key: "x" } });
+    const keybinds = new UserSettings().keybinds(false);
+
+    expect(keybinds.boatAttack).toBe("KeyX");
+    expect(keybinds.selectAllWarships).toBeUndefined();
+    // Saved as unbound, so the settings modal shows it that way too.
+    expect(new UserSettings().parsedUserKeybinds().selectAllWarships).toEqual({
+      value: "Null",
+      key: "",
+    });
+  });
+
+  it("keeps a player's own F for select-all-warships over the emoji menu", () => {
+    store({ selectAllWarships: { value: "KeyF", key: "f" } });
+    const keybinds = new UserSettings().keybinds(false);
+
+    expect(keybinds.selectAllWarships).toBe("KeyF");
+    expect(keybinds.emojiMenu).toBeUndefined();
+  });
+
+  it("leaves defaults alone when nothing clashes", () => {
+    store({ boatAttack: { value: "KeyH", key: "h" } });
+    const keybinds = new UserSettings().keybinds(false);
+
+    expect(keybinds.emojiMenu).toBe("KeyF");
+    expect(keybinds.selectAllWarships).toBe("KeyX");
+    expect(
+      new UserSettings().parsedUserKeybinds().selectAllWarships,
+    ).toBeUndefined();
+  });
+
+  it("unbinds the new arrow and zoom defaults when saved bindings already use their keys", () => {
+    store({
+      boatAttack: { value: "ArrowUp", key: "ArrowUp" },
+      attackRatioUp: { value: "Equal", key: "=" },
+    });
+    const settings = new UserSettings();
+    const keybinds = settings.keybinds(false);
+
+    expect(keybinds.boatAttack).toBe("ArrowUp");
+    expect(keybinds.moveUpArrow).toBeUndefined();
+    expect(keybinds.attackRatioUp).toBe("Equal");
+    expect(keybinds.zoomInEqual).toBeUndefined();
+    expect(settings.parsedUserKeybinds().moveUpArrow).toEqual({
+      value: "Null",
+      key: "",
+    });
+    expect(settings.parsedUserKeybinds().zoomInEqual).toEqual({
+      value: "Null",
+      key: "",
+    });
+  });
+
+  it("keeps quick chat on R when the player saved reset graphics there", () => {
+    store({ resetGfx: { value: "KeyR", key: "r" } });
+    const keybinds = new UserSettings().keybinds(false);
+
+    expect(keybinds.resetGfx).toBe("KeyR");
+    expect(keybinds.quickChat).toBe("KeyR");
+  });
+
+  it("lets modifier keys stay shared", () => {
+    store({ altKey: { value: "AltLeft", key: "Alt" } });
+    expect(new UserSettings().keybinds(false).emojiMenuModifier).toBe(
+      "AltLeft",
+    );
   });
 });

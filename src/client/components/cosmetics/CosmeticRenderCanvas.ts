@@ -1,15 +1,15 @@
-import { base64url } from "jose";
-import { html, LitElement, nothing, PropertyValues } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
 import {
   Effect,
   isNukeExplosionEffect,
   NukeExplosionAttributes,
   Pattern,
   Skin,
-} from "../../../core/CosmeticSchemas";
-import { decodePatternData } from "../../../core/PatternDecoder";
-import { ResolvedCosmetic } from "../../Cosmetics";
+} from "@openfront/shared/CosmeticSchemas";
+import { decodePatternData } from "@openfront/shared/PatternDecoder";
+import { base64url } from "jose";
+import { html, LitElement, nothing, PropertyValues } from "lit";
+import { customElement, property, state } from "lit/decorators.js";
+import type { ResolvedCosmetic } from "../../Cosmetics";
 import {
   CosmeticPreviewConfig,
   CosmeticPreviewRenderer,
@@ -23,7 +23,7 @@ import {
   UT_TRANSPORT,
   UT_WARSHIP,
 } from "../../render/types/UnitType";
-import { translateText } from "../../Utils";
+import { translateText } from "../../Translate";
 import { attributesToExplosionParams } from "../../WebGLFrameBuilder";
 
 /**
@@ -45,6 +45,13 @@ export class CosmeticRenderCanvas extends LitElement {
 
   @property({ attribute: false })
   salvoEnabled = false;
+
+  // Set only by the cosmetic-preview package, which shows one cosmetic after
+  // another on the same canvas: a change to the same scene then updates what
+  // is playing and keeps the camera. The store opens a fresh canvas per
+  // preview and leaves this off.
+  @property({ attribute: false })
+  reuseScene = false;
 
   @state()
   private hasError = false;
@@ -138,7 +145,11 @@ export class CosmeticRenderCanvas extends LitElement {
       config.effectColors = this.customColors;
     }
     config.salvoMode = this.salvoEnabled;
-    this.renderer.setCosmetic(config);
+    if (this.reuseScene) {
+      if (this.renderer.updateCosmetic(config) !== "reframe") return;
+    } else {
+      this.renderer.setCosmetic(config);
+    }
 
     if (config.mode === "SKIN") {
       const isSmall = this.checkIsSmallSkin(this.resolved);
@@ -385,32 +396,36 @@ export class CosmeticRenderCanvas extends LitElement {
       <canvas class="block h-full w-full pointer-events-none"></canvas>
 
       <!-- Salvo Mode Toggle for Atom Bomb -->
-      ${this.isAtomBombExplosion()
-        ? html`
-            <div
-              class="absolute top-3 left-3 z-20 select-none pointer-events-auto"
-            >
-              <button
-                type="button"
-                aria-label=${translateText("store.preview_salvo_toggle")}
-                title=${translateText("store.preview_salvo_toggle")}
-                @click=${this.handleToggleSalvo}
-                class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/90 backdrop-blur-md border border-white/20 text-xs font-bold text-white hover:bg-zinc-800 transition active:scale-95 shadow-lg cursor-pointer"
+      ${
+        this.isAtomBombExplosion()
+          ? html`
+              <div
+                class="absolute top-3 left-3 z-20 select-none pointer-events-auto"
               >
-                <span
-                  class="inline-block w-2 h-2 rounded-full ${this.salvoEnabled
-                    ? "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse"
-                    : "bg-zinc-500"}"
-                ></span>
-                <span
-                  >${translateText("store.preview_salvo_count", {
-                    count: this.salvoEnabled ? 5 : 1,
-                  })}</span
+                <button
+                  type="button"
+                  aria-label=${translateText("store.preview_salvo_toggle")}
+                  title=${translateText("store.preview_salvo_toggle")}
+                  @click=${this.handleToggleSalvo}
+                  class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900/90 backdrop-blur-md border border-white/20 text-xs font-bold text-white hover:bg-zinc-800 transition active:scale-95 shadow-lg cursor-pointer"
                 >
-              </button>
-            </div>
-          `
-        : nothing}
+                  <span
+                    class="inline-block w-2 h-2 rounded-full ${
+                      this.salvoEnabled
+                        ? "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse"
+                        : "bg-zinc-500"
+                    }"
+                  ></span>
+                  <span
+                    >${translateText("store.preview_salvo_count", {
+                      count: this.salvoEnabled ? 5 : 1,
+                    })}</span
+                  >
+                </button>
+              </div>
+            `
+          : nothing
+      }
     </div>`;
   }
 }

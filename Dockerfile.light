@@ -15,15 +15,22 @@ FROM node:24-slim AS build
 WORKDIR /usr/src/app
 RUN npm install --global --ignore-scripts npm@12.1.0
 ENV HUSKY=0
+# The workspace manifests come along so npm ci can link node_modules/@openfront/*
+# to packages/* (the engine / shared packages, upstream's src/core split).
 COPY package*.json .npmrc ./
+COPY packages/engine/package.json ./packages/engine/
+COPY packages/engine-api/package.json ./packages/engine-api/
+COPY packages/engine-lib/package.json ./packages/engine-lib/
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/zbin/package.json ./packages/zbin/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --ignore-scripts
 
-COPY tsconfig.json vite.config.ts eslint.config.js index.html client-api.json ./
+COPY tsconfig.json tsconfig.base.json vite.config.ts index.html client-api.json ./
 COPY resources ./resources
 COPY proprietary ./proprietary
 COPY src ./src
-COPY zbin ./zbin
+COPY packages ./packages
 COPY scripts ./scripts
 
 # Comma-separated map directory names from resources/maps/ (e.g.

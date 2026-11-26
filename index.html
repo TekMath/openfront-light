@@ -9,16 +9,37 @@
     <title data-i18n="main.title">OpenFront (ALPHA)</title>
     <link rel="manifest" href="<%- manifestHref %>" />
     <link rel="icon" type="image/svg+xml" href="<%- faviconHref %>" />
+    <!-- iOS takes its home-screen icon from here before the manifest. Without it
+         it picks the manifest's "any" icon and fills its transparent rounded
+         corners with white; iOS rounds the corners itself, so use the
+         full-bleed one. -->
+    <link rel="apple-touch-icon" href="<%- appleTouchIconHref %>" />
 
     <!-- Preload styles -->
     <style>
+      html {
+        color-scheme: dark;
+      }
+
+      html.preload {
+        visibility: visible !important;
+        opacity: 1 !important;
+        background-color: #111827 !important;
+      }
+
+      html.preload body {
+        visibility: hidden;
+        opacity: 0;
+      }
+
       .preload {
         visibility: hidden;
         opacity: 0;
         transition: opacity 0.5s ease-out;
       }
 
-      /* iOS safe area support */
+      /* iOS safe area support. openfront-light: upstream's Playwire overrides
+         (html body !important, #pw-oop-bottom_rail) are dropped: no ads here. */
       body {
         padding-top: env(safe-area-inset-top);
         padding-right: env(safe-area-inset-right);
@@ -45,22 +66,9 @@
       }
     </style>
 
-    <!-- SEO -->
-    <link rel="canonical" href="https://openfront.io/" />
-    <meta
-      name="description"
-      content="Conquer the world in this multiplayer battle royale! Expand your nation, eliminate opponents, and dominate the map in this fast-paced IO game."
-    />
-
-    <!-- Open Graph -->
-    <meta property="og:url" content="https://openfront.io/" />
-    <meta property="og:title" content="OpenFront - Battle Royale" />
-    <meta
-      property="og:description"
-      content="Conquer the world in this multiplayer battle royale! Expand your nation, eliminate opponents, and dominate the map in this fast-paced IO game."
-    />
-    <meta property="og:image" content="<%- gameplayScreenshotUrl %>" />
-    <meta property="og:type" content="game" />
+    <!-- openfront-light: no SEO (canonical link, description, Open Graph,
+         Schema.org JSON-LD): they advertise openfront.io, and a private
+         server is not meant to be indexed (see resources/public/robots.txt). -->
 
     <!--
       Injected from Server env.
@@ -89,9 +97,11 @@
       };
       // Set here rather than from the bundle so the first paint already has the
       // desktop layout. The shell's preload defines openfrontDesktop before
-      // any page script runs. ?desktop-layout previews it outside prod.
+      // any page script runs. Steam only (isSteamShell): the Android app
+      // defines it too, and lays out the way the site does in a mobile browser.
+      // ?desktop-layout previews it outside prod.
       if (
-        window.openfrontDesktop ||
+        (window.openfrontDesktop && window.openfrontDesktop.steam) ||
         (window.BOOTSTRAP_CONFIG.gameEnv !== "prod" &&
           new URLSearchParams(location.search).has("desktop-layout"))
       ) {
@@ -101,10 +111,6 @@
         "--background-image-url",
         `url("<%- backgroundImageUrl %>")`,
       );
-      // document.documentElement.style.setProperty(
-      //   "--desktop-logo-image-url",
-      //   `url("<%- desktopLogoImageUrl %>")`,
-      // );
       document.documentElement.style.setProperty(
         "--mobile-logo-image-url",
         `url("<%- mobileLogoImageUrl %>")`,
@@ -116,7 +122,9 @@
       (globalThis.litIssuedWarnings ??= new Set()).add("dev-mode");
     </script>
 
-    <!-- CrazyGames SDK -->
+    <!-- CrazyGames SDK. openfront-light: loaded directly. Upstream gates it
+         (and its other third-party scripts) behind Poki / VIVERSE portal
+         checks, which never match on a self-hosted server. -->
     <script
       src="https://sdk.crazygames.com/crazygames-sdk-v3.js"
       async
@@ -130,13 +138,35 @@
     ></script>
 
     <!-- openfront-light: the Playwire (ramp.js), Google Ad Manager, Google
-         Ads / Analytics (gtag) and Cloudflare Web Analytics tags are removed.
+         Ads / Analytics (gtag), AdShield and Cloudflare Web Analytics tags are
+         removed.
          No ads and no upstream tracking on a self-hosted server. -->
   </head>
 
   <body
     class="select-none font-sans min-h-screen bg-neutral-800 transition-opacity duration-300 ease-in-out flex flex-row flex-wrap content-start"
   >
+    <script>
+      // Halloween theme (src/client/halloween.css), Oct 25 through Nov 1 local
+      // time. It recolors the desktop logo, which is otherwise left unset.
+      // The season marker lets the settings toggle (UserSettings.halloweenTheme,
+      // same key and default) restyle live without repeating the date check.
+      (() => {
+        const now = new Date();
+        const month = now.getMonth();
+        const day = now.getDate();
+        if ((month === 9 && day >= 25) || (month === 10 && day === 1)) {
+          document.body.dataset.halloweenSeason = "";
+          document.documentElement.style.setProperty(
+            "--desktop-logo-image-url",
+            `url("<%- desktopLogoImageUrl %>")`,
+          );
+          if (localStorage.getItem("settings.halloweenTheme") !== "false") {
+            document.body.classList.add("halloween-theme");
+          }
+        }
+      })();
+    </script>
     <div id="hex-grid" class="fixed inset-0 -z-50 pointer-events-none">
       <div
         id="background-layer"
@@ -172,21 +202,22 @@
       data-i18n-aria-label="main.menu"
     ></mobile-nav-bar>
 
-    <!-- MAIN CONTENT AREA -->
+    <!-- MAIN CONTENT AREA (shrink-0 while a page is open: ad creatives inject
+         in-flow siblings into <body>, which would squeeze the page otherwise) -->
     <div
-      class="in-[.in-game]:hidden flex-1 basis-full min-w-0 min-h-dvh in-[.page-open]:min-h-0 in-[.page-open]:overflow-hidden relative pt-[var(--top-ad-pad,0px)] in-[.page-open]:pt-[var(--top-ad-height,0px)] transition-[margin] duration-500 ease-out will-change-[margin-left] flex flex-col"
+      class="in-[.in-game]:hidden flex-1 basis-full min-w-0 min-h-dvh in-[.page-open]:min-h-0 in-[.page-open]:shrink-0 in-[.page-open]:overflow-hidden relative pt-[var(--top-ad-pad,0px)] in-[.page-open]:pt-[var(--top-ad-height,0px)] transition-[margin] duration-500 ease-out will-change-[margin-left] flex flex-col"
     >
       <!-- Desktop Top Bar (sticky so it stays visible while the page scrolls,
            offset below the header ad when one is showing; static while an
            inline page is open, when the content area is padded below the ad
            instead and nothing scrolls) -->
       <desktop-nav-bar
-        class="sticky top-[var(--top-ad-height,0px)] z-[60] in-[.page-open]:static"
+        class="sticky top-[var(--top-ad-height,0px)] z-[60] in-[.page-open]:static in-[.page-open]:compact:hidden"
       ></desktop-nav-bar>
 
       <div
         id="turnstile-container"
-        class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-99999"
+        class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-99999 pointer-events-none data-[interactive=true]:top-0 data-[interactive=true]:left-0 data-[interactive=true]:translate-x-0 data-[interactive=true]:translate-y-0 data-[interactive=true]:w-full data-[interactive=true]:h-full data-[interactive=true]:flex data-[interactive=true]:items-center data-[interactive=true]:justify-center data-[interactive=true]:bg-black/50"
       ></div>
 
       <banned-modal></banned-modal>
@@ -201,11 +232,6 @@
           inline
           class="hidden w-full h-full page-content relative z-50"
         ></matchmaking-modal>
-        <news-modal
-          id="page-news"
-          inline
-          class="hidden w-full h-full page-content relative z-50"
-        ></news-modal>
         <single-player-modal
           id="page-single-player"
           inline
@@ -289,7 +315,9 @@
         ></detailed-view-modal>
       </main-layout>
 
-      <div class="[.in-game_&]:hidden mt-auto flex flex-col shrink-0">
+      <div
+        class="[.in-game_&]:hidden in-[.page-open]:compact:hidden mt-auto flex flex-col shrink-0"
+      >
         <page-footer></page-footer>
       </div>
 
@@ -300,14 +328,16 @@
       <account-settings-modal></account-settings-modal>
       <change-username-modal></change-username-modal>
       <subscription-modal></subscription-modal>
+      <news-modal></news-modal>
     </div>
 
     <!-- Game components -->
     <div id="app"></div>
 
-    <!-- Bottom HUD: <sm=column, sm..lg=2col (HUD left | events right), lg+=3col grid centered -->
+    <!-- Bottom HUD: <sm=column, sm..lg=2col (HUD left | events right; flipped on
+         landscape phones so the events are on the left), lg+=3col grid centered -->
     <div
-      class="fixed bottom-0 left-0 w-full z-[200] flex flex-col pointer-events-none sm:flex-row sm:items-end lg:grid lg:grid-cols-[1fr_500px_1fr] lg:items-end min-[1200px]:px-4"
+      class="[body:not(.in-game)_&]:hidden! fixed bottom-0 left-0 w-full z-[200] flex flex-col pointer-events-none sm:flex-row sm:max-lg:landscape:flex-row-reverse sm:items-end lg:grid lg:grid-cols-[1fr_auto_1fr] lg:items-end min-[1200px]:px-4"
       style="
         padding-bottom: env(safe-area-inset-bottom);
         padding-left: env(safe-area-inset-left);
@@ -316,25 +346,46 @@
     >
       <!-- HUD: <sm contents (children join outer flex), sm+ flex-col 460px, lg+ col-2 -->
       <div
-        class="contents sm:flex sm:flex-col sm:pointer-events-none w-full sm:w-[500px] lg:col-start-2 sm:z-10"
+        class="contents sm:flex sm:flex-col sm:pointer-events-none w-full sm:w-[500px] lg:w-fit lg:min-w-[500px] lg:col-start-2 sm:z-10"
       >
         <attacks-display
-          class="w-full pointer-events-auto order-1 sm:order-none"
+          class="w-full lg:w-0 lg:min-w-full pointer-events-auto order-1 sm:order-none max-sm:side-bar:pe-8"
         ></attacks-display>
+        <!-- Above the control panel's stacking context: in portrait below lg
+             the unit bar inside it is fixed to the right edge and would
+             otherwise cover the panel's close button on phones. -->
         <tutorial-panel
-          class="hidden w-full order-3 sm:order-none"
+          class="hidden w-full lg:w-0 lg:min-w-full order-3 sm:order-none z-20 max-sm:side-bar:pe-8"
         ></tutorial-panel>
+        <!-- The unit bar is a row below the control panel from lg up, a row
+             above it on landscape phones, and a column fixed to the right edge
+             below lg in portrait (side-bar). The blur is off there: a
+             backdrop-filter would pin the fixed bar to this panel instead of
+             the screen. The control panel blurs itself instead, as the bar
+             is not inside it.
+             The panel runs on into the safe-area insets around it (home
+             indicator, notch) so its content reaches the screen edge. Only on
+             the edges it touches: left below lg (right instead on landscape
+             phones), right below sm, the bottom until it floats from 1200px. -->
         <div
-          class="pointer-events-auto bg-gray-800/92 backdrop-blur-sm sm:rounded-tr-lg lg:rounded-t-lg min-[1200px]:rounded-lg shadow-lg order-3 sm:order-none"
+          class="flex flex-col pointer-events-auto hud-panel side-bar:backdrop-blur-none sm:rounded-tr-lg sm:max-lg:landscape:rounded-tr-none sm:max-lg:landscape:rounded-tl-lg lg:rounded-t-lg min-[1200px]:rounded-lg order-3 sm:order-none z-10 max-[1200px]:-mb-[env(safe-area-inset-bottom)] max-lg:-ml-[env(safe-area-inset-left)] sm:max-lg:landscape:ml-0 max-sm:-mr-[env(safe-area-inset-right)] sm:max-lg:landscape:-mr-[env(safe-area-inset-right)]"
         >
-          <control-panel class="w-full"></control-panel>
-          <unit-display class="hidden lg:block w-full"></unit-display>
+          <control-panel
+            class="w-full side-bar:rounded-[inherit] side-bar:backdrop-blur-hud"
+          ></control-panel>
+          <unit-display
+            class="block w-full max-lg:landscape:order-first side-bar:w-auto side-bar:fixed side-bar:top-1/2 side-bar:-translate-y-1/2 side-bar:right-[env(safe-area-inset-right)]"
+          ></unit-display>
         </div>
       </div>
 
-      <!-- events+chat: <sm between attacks and control (order-2), sm+ right side, lg+ col-3 -->
+      <!-- events+chat: <sm between attacks and control (order-2), sm+ right side, lg+ col-3.
+           sm and up in portrait below lg they clear the unit bar on the right edge.
+           On landscape phones they're on the left, run into the safe-area insets
+           like the control panel. Above the control panel's stacking context,
+           like the tutorial panel, so the portrait unit bar doesn't cover them. -->
       <div
-        class="flex flex-col pointer-events-none items-end order-2 sm:order-none sm:flex-1 lg:col-start-3 lg:self-end lg:justify-end"
+        class="flex flex-col pointer-events-none items-end order-2 sm:order-none z-20 sm:flex-1 sm:side-bar:pr-9 sm:max-lg:landscape:items-start sm:max-lg:landscape:-ml-[env(safe-area-inset-left)] sm:max-lg:landscape:-mb-[env(safe-area-inset-bottom)] lg:col-start-3 lg:self-end lg:justify-end"
       >
         <chat-display
           class="w-full sm:w-auto pointer-events-auto"
@@ -352,11 +403,41 @@
     <emoji-table></emoji-table>
     <build-menu></build-menu>
     <win-modal></win-modal>
+    <onboarding-overlay></onboarding-overlay>
     <new-lobby-prompt></new-lobby-prompt>
     <game-starting-modal></game-starting-modal>
-    <div class="flex flex-col items-end fixed top-0 right-0 z-1000 gap-2">
-      <game-right-sidebar></game-right-sidebar>
-      <replay-panel></replay-panel>
+    <!-- Stops iOS blurring the top of the screen in-game. WebKit (iOS 26)
+         blurs the content under the status bar unless the element at the
+         top centre is a fixed, full-width bar over 10px tall with a
+         background colour; it then tints the status bar with that colour
+         instead, blended over the page background when it's translucent.
+         In a game the top centre is otherwise only the map's input overlay,
+         so the map and HUD there blurred. This one is all but transparent,
+         and above the top HUD so the HUD's backdrop blur isn't picked up. -->
+    <div
+      class="hidden in-[.in-game]:block fixed top-0 inset-x-0 z-[1100] h-[calc(env(safe-area-inset-top)+12px)] bg-neutral-800/1 pointer-events-none"
+    ></div>
+    <!-- Top HUD: below lg each piece is fixed on its own. From lg, where the
+         leaderboard opens by default, they share one row, leaderboard | card |
+         sidebar: the card is centered when it fits and shifts right or narrows
+         to clear the open leaderboard instead of covering it. -->
+    <div
+      class="[body:not(.in-game)_&]:hidden! contents lg:fixed lg:top-0 lg:inset-x-0 lg:z-1000 lg:grid lg:grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] lg:items-start lg:pointer-events-none"
+    >
+      <game-left-sidebar
+        class="lg:col-start-1 lg:justify-self-start"
+      ></game-left-sidebar>
+      <player-info-overlay
+        class="lg:col-start-2 lg:min-w-0"
+      ></player-info-overlay>
+      <div
+        id="game-right-hud"
+        style="margin-top: var(--game-health-offset, 0px)"
+        class="flex flex-col items-end gap-2 max-lg:fixed max-lg:top-0 max-lg:right-0 max-lg:z-1000 lg:col-start-3 lg:justify-self-end lg:pointer-events-auto"
+      >
+        <game-right-sidebar></game-right-sidebar>
+        <replay-panel></replay-panel>
+      </div>
     </div>
     <settings-modal></settings-modal>
     <!-- The in-game settings modal: the same component as #page-settings, but
@@ -372,9 +453,7 @@
     <alert-frame></alert-frame>
     <chat-modal></chat-modal>
     <multi-tab-modal></multi-tab-modal>
-    <game-left-sidebar></game-left-sidebar>
     <performance-overlay></performance-overlay>
-    <player-info-overlay></player-info-overlay>
     <heads-up-message></heads-up-message>
 
     <!-- openfront-light: the featured Twitch stream panel is removed. -->

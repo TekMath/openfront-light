@@ -23,14 +23,19 @@ src/assets/
 eslint_out.txt
 tests/perf/output/
 
-# Locally built Go binary (gen-maps uses `go run .`)
-map-generator/map-generator
-map-generator/map-generator.exe
-
 # Staging dir tests/RenderDesktopDescriptor.test.ts creates in the repo root
 # (it needs the CLI copy at the same relative depth as the real one). Cleaned
 # up after each case; ignored so a crashed run cannot dirty the tree.
 .tmp-desktop-cli-*
 
-# openfront-light: server bundle of the light self-host image (npm run build-server-light)
+# src/core package split (#1701): tick-trace inputs and baselines
+.tick-records/
+.tick-baseline/
+
+# Saved replay records for local testing
+records/*
+!records/demoGame1.json
+
+# Built packages (npm run build:cosmetic-preview), and the server bundle of
+# the openfront-light self-host image (npm run build-server-light)
 dist/

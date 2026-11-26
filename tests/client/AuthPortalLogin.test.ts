@@ -1,0 +1,145 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setApiEnabledForTests } from "../../src/client/ApiBase";
+
+// openfront-light disables the closed-source API by default; this suite
+// covers the upstream behaviour, so it turns it back on.
+setApiEnabledForTests(true);
+
+const portal = vi.hoisted(() => ({
+  name: vi.fn((): "crazygames" | "poki" | "viverse" | null => null),
+  getUserToken: vi.fn(async (): Promise<string | null> => null),
+}));
+
+vi.mock("../../src/client/UserSettings", () => ({
+  UserSettings: { setPlayerId: vi.fn() },
+}));
+vi.mock("../../src/client/SteamSDK", () => ({
+  steamSDK: { isOnSteam: () => false },
+}));
+vi.mock("../../src/client/GamePortal", () => ({ gamePortal: portal }));
+
+const { clearLocalSession, sessionUncertain, userAuth } =
+  await import("../../src/client/Auth");
+const { ClientEnv } = await import("../../src/client/ClientEnv");
+
+// Portal players exchange a fresh portal token at /auth/<portal> rather than
+// using the refresh cookie, which a cross-site iframe never sends.
+describe("portal login", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    (window as unknown as { BOOTSTRAP_CONFIG: unknown }).BOOTSTRAP_CONFIG = {
+      gameEnv: "prod",
+      numWorkers: 1,
+      turnstileSiteKey: "x",
+      jwtAudience: "openfront.dev",
+      instanceId: "web",
+      gitCommit: "test",
+    };
+    ClientEnv.reset();
+    fetchMock = vi.fn(async () => ({
+      status: 200,
+      json: async () => ({ jwt: "jwt-value", expiresIn: 3600 }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    clearLocalSession();
+    vi.unstubAllGlobals();
+    portal.name.mockReset().mockReturnValue(null);
+    portal.getUserToken.mockReset().mockResolvedValue(null);
+    delete (window as unknown as { BOOTSTRAP_CONFIG?: unknown })
+      .BOOTSTRAP_CONFIG;
+    ClientEnv.reset();
+  });
+
+  it.each(["poki", "crazygames", "viverse"] as const)(
+    "exchanges a signed-in %s token at its endpoint",
+    async (name) => {
+      portal.name.mockReturnValue(name);
+      portal.getUserToken.mockResolvedValue("portal-token");
+      await userAuth();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe(`https://api.openfront.dev/auth/${name}`);
+      expect(JSON.parse(init.body)).toEqual({ token: "portal-token" });
+      // Bounded, so an exchange that never answers can't stall userAuth().
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    },
+  );
+
+  it.each(["poki", "crazygames", "viverse"] as const)(
+    "falls back to the guest refresh when no %s user is signed in",
+    async (name) => {
+      portal.name.mockReturnValue(name);
+      await userAuth();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        "https://api.openfront.dev/auth/refresh",
+      );
+    },
+  );
+
+  // sessionUncertain: "couldn't check" vs "signed out" for the end screen's
+  // Buy. A portal exchange settles it like /auth/refresh does.
+  describe("sessionUncertain", () => {
+    const answer = (status: number) =>
+      fetchMock.mockImplementation(async () => ({
+        status,
+        json: async () => ({}),
+      }));
+    const signedInPortal = () => {
+      portal.name.mockReturnValue("crazygames");
+      portal.getUserToken.mockResolvedValue("portal-token");
+    };
+    beforeEach(() => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it("a portal exchange rejected (401) after an unreachable refresh: settled", async () => {
+      answer(503);
+      expect(await userAuth()).toBe(false);
+      expect(sessionUncertain()).toBe(true);
+      signedInPortal();
+      answer(401);
+      expect(await userAuth()).toBe(false);
+      expect(sessionUncertain()).toBe(false);
+    });
+
+    it.each([500, 503, 429])(
+      "a portal exchange that gets a %i: uncertain",
+      async (status) => {
+        signedInPortal();
+        answer(status);
+        expect(await userAuth()).toBe(false);
+        expect(sessionUncertain()).toBe(true);
+      },
+    );
+
+    it("a portal exchange that succeeds after an unreachable one: settled", async () => {
+      signedInPortal();
+      answer(503);
+      await userAuth();
+      expect(sessionUncertain()).toBe(true);
+      fetchMock.mockImplementation(async () => ({
+        status: 200,
+        json: async () => ({ jwt: "jwt-value", expiresIn: 3600 }),
+      }));
+      await userAuth();
+      expect(sessionUncertain()).toBe(false);
+    });
+
+    it("a portal exchange that never reaches the server: uncertain", async () => {
+      signedInPortal();
+      fetchMock.mockImplementation(async () => {
+        throw new TypeError("Failed to fetch");
+      });
+      expect(await userAuth()).toBe(false);
+      expect(sessionUncertain()).toBe(true);
+    });
+  });
+});

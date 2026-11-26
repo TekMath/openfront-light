@@ -4,7 +4,11 @@
 // vite.config.ts bakes the subset in as __ENABLED_MAPS__ (lowercase map
 // directory names, the same names FetchGameMapLoader loads from), or null for
 // every map, the upstream behaviour.
-import { GameMapType, MapInfo } from "../../core/game/Game";
+import {
+  GameMapType,
+  listedMaps,
+  MapInfo,
+} from "@openfront/engine-api/game/GameTypes";
 
 declare const __ENABLED_MAPS__: string[] | null | undefined;
 
@@ -38,10 +42,12 @@ export function filterEnabledMaps(
   return list.filter((m) => isMapEnabled(m.type, subset));
 }
 
+// The listed maps (upstream's `listedMaps`: every map but hidden ones such as
+// the tutorial map) that this build embeds.
 export function enabledMapTypes(
   subset: ReadonlySet<string> | null = enabledDirs,
 ): GameMapType[] {
-  return Object.values(GameMapType).filter((m) => isMapEnabled(m, subset));
+  return listedMaps.map((m) => m.type).filter((m) => isMapEnabled(m, subset));
 }
 
 // The map a modal starts on: World as upstream, else the first embedded map.

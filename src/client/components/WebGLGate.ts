@@ -1,10 +1,6 @@
 import { html, LitElement } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import {
-  desktopQuit,
-  isDesktopShell,
-  requestDesktopQuit,
-} from "../DesktopShell";
+import { desktopQuit, isSteamShell, requestDesktopQuit } from "../DesktopShell";
 import { translateText } from "../Utils";
 
 export type WebGLGateStatus = "software" | "unsupported" | "limited";
@@ -106,7 +102,7 @@ export class WebGLGate extends LitElement {
   }
 
   render() {
-    if (this.status !== "limited" && isDesktopShell()) {
+    if (this.status !== "limited" && isSteamShell()) {
       return this.renderDesktop();
     }
     const limited = this.status === "limited";
@@ -156,16 +152,18 @@ export class WebGLGate extends LitElement {
               ${notes.map((note) => html`<li>${note}</li>`)}
             </ul>
           </section>
-          ${limited
-            ? html`
-                <button
-                  class="mt-5 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-bold text-white transition-colors"
-                  @click=${() => this.remove()}
-                >
-                  Continue anyway
-                </button>
-              `
-            : null}
+          ${
+            limited
+              ? html`
+                  <button
+                    class="mt-5 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-bold text-white transition-colors"
+                    @click=${() => this.remove()}
+                  >
+                    Continue anyway
+                  </button>
+                `
+              : null
+          }
         </div>
       </div>
     `;
@@ -192,16 +190,18 @@ export class WebGLGate extends LitElement {
               (key) => html`<li>${translateText(key)}</li>`,
             )}
           </ol>
-          ${desktopQuit() !== null
-            ? html`
-                <button
-                  class="mt-5 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-bold text-white transition-colors"
-                  @click=${() => requestDesktopQuit()}
-                >
-                  ${translateText("desktop_webgl_gate.quit")}
-                </button>
-              `
-            : null}
+          ${
+            desktopQuit() !== null
+              ? html`
+                  <button
+                    class="mt-5 w-full py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-bold text-white transition-colors"
+                    @click=${() => requestDesktopQuit()}
+                  >
+                    ${translateText("desktop_webgl_gate.quit")}
+                  </button>
+                `
+              : null
+          }
         </div>
       </div>
     `;

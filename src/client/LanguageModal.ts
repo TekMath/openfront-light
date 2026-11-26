@@ -1,7 +1,7 @@
+import { assetUrl } from "@openfront/shared/AssetUrls";
 import { html, TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { translateText } from "../client/Utils";
-import { assetUrl } from "../core/AssetUrls";
 import { BaseModal } from "./components/BaseModal";
 import { modalHeader } from "./components/ui/ModalHeader";
 
@@ -47,6 +47,8 @@ export class LanguageModal extends BaseModal {
           ${this.languageList.map((lang) => {
             const isActive = this.currentLang === lang.code;
             const isDebug = lang.code === "debug";
+            // English and debug have no entry.
+            const coverage: number | undefined = __LANG_COVERAGE__[lang.code];
 
             let buttonClasses =
               "relative group rounded-xl border transition-all duration-200 flex items-center p-3 gap-3 w-full cursor-pointer";
@@ -73,35 +75,49 @@ export class LanguageModal extends BaseModal {
                 />
                 <div class="flex flex-col items-start min-w-0">
                   <span
-                    class="text-sm font-bold uppercase tracking-wider whitespace-normal break-words w-full text-left ${isActive
-                      ? "text-white"
-                      : "text-gray-200 group-hover:text-white"}"
+                    class="text-sm font-bold uppercase tracking-wider whitespace-normal break-words w-full text-left ${
+                      isActive
+                        ? "text-white"
+                        : "text-gray-200 group-hover:text-white"
+                    }"
                     >${lang.native}</span
                   >
                   <span
                     class="text-xs text-white/40 uppercase tracking-widest group-hover:text-white/60 transition-colors whitespace-normal break-words w-full text-left"
                     >${lang.en}</span
                   >
+                  ${
+                    coverage === undefined
+                      ? ""
+                      : html`<span
+                          class="text-xs text-white/40 group-hover:text-white/60 transition-colors"
+                          >${translateText("select_lang.translated", {
+                            percent: coverage,
+                          })}</span
+                        >`
+                  }
                 </div>
 
-                ${isActive
-                  ? html`
-                      <div class="ml-auto text-blue-400 shrink-0">
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          viewBox="0 0 24 24"
-                          fill="currentColor"
-                          class="w-5 h-5"
-                        >
-                          <path
-                            fill-rule="evenodd"
-                            d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z"
-                            clip-rule="evenodd"
-                          />
-                        </svg>
-                      </div>
-                    `
-                  : ""}
+                ${
+                  isActive
+                    ? html`
+                        <div class="ml-auto text-blue-400 shrink-0">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                            class="w-5 h-5"
+                          >
+                            <path
+                              fill-rule="evenodd"
+                              d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z"
+                              clip-rule="evenodd"
+                            />
+                          </svg>
+                        </div>
+                      `
+                    : ""
+                }
               </button>
             `;
           })}

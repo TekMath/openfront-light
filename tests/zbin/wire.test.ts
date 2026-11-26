@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   Difficulty,
   GameMapSize,
@@ -6,21 +5,23 @@ import {
   GameMode,
   GameType,
   UnitType,
-} from "../../src/core/game/Game";
+} from "@openfront/engine-api/game/GameTypes";
 import {
   ADMIN_BOT_CLIENT_ID,
+  GameConfig,
+  StampedIntent,
+  Turn,
+} from "@openfront/engine-api/Schemas";
+import { replacer } from "@openfront/shared/SharedUtil";
+import {
   ClientMessage,
   ClientMessageSchema,
-  GameConfig,
   LogSeverity,
   PublicLobbyMessage,
   PublicLobbyMessageSchema,
   ServerMessage,
   ServerMessageSchema,
-  StampedIntent,
-  Turn,
-} from "../../src/core/Schemas";
-import { replacer } from "../../src/core/Util";
+} from "@openfront/shared/WireSchemas";
 import {
   createGameWireContext,
   decodeClientMessage,
@@ -29,8 +30,9 @@ import {
   encodeClientMessage,
   encodeLobbyMessage,
   encodeServerMessage,
-} from "../../src/core/ZbinWire";
-import { ZbDecodeError } from "../../zbin";
+} from "@openfront/shared/ZbinWire";
+import { ZbDecodeError } from "@openfront/zbin";
+import { describe, expect, it } from "vitest";
 
 const PLAYERS = [
   { clientID: "aB3dEf7h" },
@@ -173,6 +175,14 @@ const SERVER_MESSAGES: ServerMessage[] = [
       clients: [
         { clientID: P1, username: "alpha", clanTag: null, teamIndex: 0 },
         { clientID: P2, username: "bravo", clanTag: "XY", verified: true },
+        // Server-stamped card background, after levelBadge.
+        {
+          clientID: P3,
+          username: "charlie",
+          clanTag: null,
+          levelBadge: 7,
+          cardBackground: "bg_pacific",
+        },
       ],
       lobbyCreatorClientID: P1,
     },
@@ -565,5 +575,126 @@ describe("zbin wire: lobby list messages", () => {
     expect(() => decodeLobbyMessage(bytes.subarray(0, 2))).toThrow(
       ZbDecodeError,
     );
+  });
+});
+
+describe("WireSchemas validate and safeParse (compiled with zb.compile)", () => {
+  describe("ClientMessageSchema", () => {
+    const validPing: ClientMessage = { type: "ping", sentAt: 12345 };
+    const validIntent: ClientMessage = {
+      type: "intent",
+      intent: { type: "attack", targetID: P3, troops: 17.25 },
+    };
+    const invalidMessages = [
+      { type: "unknown" },
+      { type: "ping" }, // missing sentAt
+      { type: "intent", intent: { type: "invalid_intent" } },
+      {},
+      null,
+      undefined,
+      "invalid",
+    ];
+
+    it(".validate() returns true for representative client messages", () => {
+      expect(ClientMessageSchema.validate(validPing)).toBe(true);
+      expect(ClientMessageSchema.validate(validIntent)).toBe(true);
+    });
+
+    it(".validate() returns false for malformed objects", () => {
+      for (const invalid of invalidMessages) {
+        expect(ClientMessageSchema.validate(invalid)).toBe(false);
+      }
+    });
+
+    it(".safeParse() produces the exact expected structure for client messages", () => {
+      const pingResult = ClientMessageSchema.safeParse(validPing);
+      expect(pingResult.success).toBe(true);
+      if (pingResult.success) {
+        expect(pingResult.error).toBeUndefined();
+        expect(pingResult.data).toEqual(validPing);
+      }
+
+      const intentResult = ClientMessageSchema.safeParse(validIntent);
+      expect(intentResult.success).toBe(true);
+      if (intentResult.success) {
+        expect(intentResult.error).toBeUndefined();
+        expect(intentResult.data).toEqual(validIntent);
+      }
+    });
+
+    it(".safeParse() fails with success: false for malformed client messages", () => {
+      for (const invalid of invalidMessages) {
+        const result = ClientMessageSchema.safeParse(invalid);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toBeDefined();
+          expect(result.data).toBeUndefined();
+        }
+      }
+    });
+  });
+
+  describe("ServerMessageSchema", () => {
+    const validPing: ServerMessage = { type: "ping" };
+    const validTurn: ServerMessage = {
+      type: "turn",
+      turn: { turnNumber: 42, intents: [] },
+    };
+    const validPong: ServerMessage = { type: "pong", sentAt: 54321 };
+    const invalidMessages = [
+      { type: "unknown" },
+      { type: "pong" }, // missing sentAt
+      { type: "turn" }, // missing turn
+      {},
+      null,
+      undefined,
+      "invalid",
+    ];
+
+    it(".validate() returns true for representative server messages", () => {
+      expect(ServerMessageSchema.validate(validPing)).toBe(true);
+      expect(ServerMessageSchema.validate(validTurn)).toBe(true);
+      expect(ServerMessageSchema.validate(validPong)).toBe(true);
+    });
+
+    it(".validate() returns false for malformed objects", () => {
+      for (const invalid of invalidMessages) {
+        expect(ServerMessageSchema.validate(invalid)).toBe(false);
+      }
+    });
+
+    it(".safeParse() produces the exact expected structure for server messages", () => {
+      const pingResult = ServerMessageSchema.safeParse(validPing);
+      expect(pingResult.success).toBe(true);
+      if (pingResult.success) {
+        expect(pingResult.error).toBeUndefined();
+        expect(pingResult.data).toEqual(validPing);
+      }
+
+      const turnResult = ServerMessageSchema.safeParse(validTurn);
+      expect(turnResult.success).toBe(true);
+      if (turnResult.success) {
+        expect(turnResult.error).toBeUndefined();
+        expect(turnResult.data).toEqual(validTurn);
+      }
+
+      const pongResult = ServerMessageSchema.safeParse(validPong);
+      expect(pongResult.success).toBe(true);
+      if (pongResult.success) {
+        expect(pongResult.error).toBeUndefined();
+        expect(pongResult.data).toEqual(validPong);
+      }
+    });
+
+    it(".safeParse() fails with success: false for malformed server messages", () => {
+      for (const invalid of invalidMessages) {
+        const result = ServerMessageSchema.safeParse(invalid);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toBeDefined();
+          expect(result.data).toBeUndefined();
+        }
+      }
+    });
   });
 });

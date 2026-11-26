@@ -1,5 +1,5 @@
+import { GameEnv } from "@openfront/shared/configuration/Env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GameEnv } from "../../src/core/configuration/Config";
 import { verifyClientToken } from "../../src/server/jwt";
 import { ServerEnv } from "../../src/server/ServerEnv";
 

@@ -2,7 +2,14 @@ import { LitElement, TemplateResult, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { translateText } from "../../Utils";
 
-type ButtonVariant = "primary" | "secondary" | "danger" | "warning" | "ghost";
+type ButtonVariant =
+  | "primary"
+  | "secondary"
+  | "danger"
+  | "warning"
+  | "ghost"
+  // A destructive action shown as red text, not a full button.
+  | "dangerLink";
 type ButtonSize = "xs" | "sm" | "md" | "lg";
 type ButtonWidth = "auto" | "block" | "blockDesktop" | "fill";
 type IconPosition = "left" | "right" | "only";
@@ -42,6 +49,8 @@ export class OButton extends LitElement {
         return "bg-cyber-yellow hover:brightness-110 text-gray-900 disabled:bg-yellow-900 disabled:text-gray-300";
       case "ghost":
         return "bg-transparent hover:bg-white/10 text-malibu-blue disabled:text-gray-500 disabled:hover:bg-transparent";
+      case "dangerLink":
+        return "bg-transparent text-red-400 hover:text-red-300 hover:underline underline-offset-2 !px-0 disabled:text-gray-500";
     }
   }
 
@@ -66,7 +75,8 @@ export class OButton extends LitElement {
       case "md":
         return "py-3 px-4 text-base lg:text-lg";
       case "lg":
-        return "py-4 px-6 text-lg lg:text-xl";
+        // Short frames (portals, small laptops) can't spare a 60px footer button.
+        return "py-4 px-6 text-lg lg:text-xl compact:py-2.5 compact:text-base";
     }
   }
 

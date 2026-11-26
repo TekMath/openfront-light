@@ -1,18 +1,30 @@
+import type {
+  GameMapType,
+  GameType,
+} from "@openfront/engine-api/game/GameTypes";
+import type { GameConfig } from "@openfront/engine-api/Schemas";
+import type { GameEndInfo } from "@openfront/shared/WireSchemas";
 import {
   html,
   LitElement,
+  nothing,
   type PropertyValues,
   type TemplateResult,
 } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { type GameEndInfo } from "../../../../core/Schemas";
-import {
-  GameMode,
-  GameType,
-  type GameMapType,
-} from "../../../../core/game/Game";
 import { fetchGameById } from "../../../Api";
 import { terrainMapFileLoader } from "../../../TerrainMapFileLoader";
+import {
+  disabledUnitsBox,
+  FLAT_SETTING_TAG,
+  formatGameType,
+  formatGameVisibility,
+  hostCheatsBox,
+  lobbySettingTagText,
+  MODE_BADGE_CLASS,
+  notableLobbySettings,
+  VISIBILITY_BADGE_CLASS,
+} from "../../../utilities/LobbySettingsSummary";
 import { getMapName, renderDuration, translateText } from "../../../Utils";
 import { renderLoadingSpinner } from "../../BaseModal";
 import {
@@ -25,12 +37,22 @@ import "../ranking/PlayerRow";
 import "../ranking/RankingControls";
 import { formatAbsoluteTime } from "./GameHistoryDates";
 
+export interface GameInfoLoadedDetail {
+  gameId: string;
+  info: GameEndInfo | null;
+}
+
 /**
  * Game-stats content for the Account > Games > Stats drill-down.
  */
 @customElement("game-info-view")
 export class GameInfoView extends LitElement {
   @property({ type: String }) gameId: string | null = null;
+  // Shown right under the game summary card, once the game has loaded (the
+  // stats modal puts the player's XP there).
+  @property({ attribute: false }) afterSummary:
+    | TemplateResult
+    | typeof nothing = nothing;
 
   @state() private rankType = RankType.Lifetime;
   @state() private mapImage: string | null = null;
@@ -70,11 +92,13 @@ export class GameInfoView extends LitElement {
     if (!this.gameId) return html``;
     return html`
       <div class="w-full max-w-[800px] mx-auto">
-        ${this.isLoadingGame
-          ? this.renderLoadingAnimation()
-          : this.loadFailed
-            ? this.renderError()
-            : this.renderRanking()}
+        ${
+          this.isLoadingGame
+            ? this.renderLoadingAnimation()
+            : this.loadFailed
+              ? this.renderError()
+              : this.renderRanking()
+        }
       </div>
     `;
   }
@@ -183,45 +207,41 @@ export class GameInfoView extends LitElement {
           <div
             class="relative min-h-36 overflow-hidden border-b border-white/10 bg-deep-navy sm:min-h-44 sm:border-b-0 sm:border-r"
           >
-            ${this.mapImage
-              ? html`<img
-                  data-map-image
-                  src=${this.mapImage}
-                  alt=${mapName}
-                  draggable="false"
-                  decoding="async"
-                  @error=${() => this.handleMapImageError()}
-                  class="absolute inset-0 h-full w-full object-cover"
-                />`
-              : this.renderMapFallback()}
+            ${
+              this.mapImage
+                ? html`<img
+                    data-map-image
+                    src=${this.mapImage}
+                    alt=${mapName}
+                    draggable="false"
+                    decoding="async"
+                    @error=${() => this.handleMapImageError()}
+                    class="absolute inset-0 h-full w-full object-cover"
+                  />`
+                : this.renderMapFallback()
+            }
             <div
               class="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/65 via-black/5 to-black/10 sm:bg-gradient-to-r sm:from-transparent sm:via-transparent sm:to-black/25"
             ></div>
           </div>
           <div class="flex min-w-0 flex-col justify-between p-4 sm:p-5">
             <div>
-              <div class="mb-2 flex flex-wrap items-center gap-2">
-                <span
-                  class="rounded-md border border-malibu-blue/25 bg-malibu-blue/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-aquarius"
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <h2
+                  class="min-w-0 truncate text-xl font-bold tracking-wide text-white sm:text-2xl"
+                  title=${mapName}
                 >
-                  ${translateText(
-                    info.config.gameMode === GameMode.Team
-                      ? "game_mode.teams"
-                      : "game_mode.ffa",
-                  )}
-                </span>
-                <span
-                  class="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-white/45"
-                >
-                  ${this.gameTypeLabel(info.config.gameType)}
-                </span>
+                  ${mapName}
+                </h2>
+                <div class="flex shrink-0 flex-wrap items-center gap-2">
+                  <span class="rounded-md border ${MODE_BADGE_CLASS}">
+                    ${formatGameType(info.config)}
+                  </span>
+                  <span class="rounded-md border ${VISIBILITY_BADGE_CLASS}">
+                    ${this.gameTypeLabel(info.config.gameType, info.visibleAt)}
+                  </span>
+                </div>
               </div>
-              <h2
-                class="truncate text-xl font-bold tracking-wide text-white sm:text-2xl"
-                title=${mapName}
-              >
-                ${mapName}
-              </h2>
               <div
                 data-game-date
                 class="mt-2 flex items-center gap-1.5 text-xs font-medium tabular-nums text-white/50"
@@ -248,6 +268,55 @@ export class GameInfoView extends LitElement {
             </div>
           </div>
         </div>
+        ${this.renderModifiers(info.config)}
+      </div>
+      ${this.afterSummary}
+    `;
+  }
+
+  private renderModifiers(config: GameConfig): TemplateResult | typeof nothing {
+    const settings = notableLobbySettings(config, null);
+    const hasSettings = settings.length > 0;
+    const disabledUnits = disabledUnitsBox(
+      config,
+      hasSettings ? "mt-3" : "",
+      "flat",
+    );
+    const hostCheats = hostCheatsBox(
+      config,
+      hasSettings || disabledUnits !== null ? "mt-3" : "",
+      "flat",
+    );
+    if (
+      settings.length === 0 &&
+      disabledUnits === null &&
+      hostCheats === null
+    ) {
+      return nothing;
+    }
+
+    return html`
+      <div
+        data-game-modifiers
+        class="border-t border-white/10 bg-black/15 p-4 sm:p-5"
+      >
+        ${this.renderSettingsTags(settings)} ${disabledUnits ?? nothing}
+        ${hostCheats ?? nothing}
+      </div>
+    `;
+  }
+
+  private renderSettingsTags(
+    settings: ReturnType<typeof notableLobbySettings>,
+  ): TemplateResult | typeof nothing {
+    if (settings.length === 0) return nothing;
+    return html`
+      <div class="flex flex-wrap gap-1.5" data-modifier-tags>
+        ${settings.map(
+          (s) => html`
+            <span class=${FLAT_SETTING_TAG}>${lobbySettingTagText(s)}</span>
+          `,
+        )}
       </div>
     `;
   }
@@ -300,17 +369,8 @@ export class GameInfoView extends LitElement {
     this.mapImage = null;
   }
 
-  private gameTypeLabel(gameType: GameType): string {
-    switch (gameType) {
-      case GameType.Public:
-        return translateText("account_modal.games_type_public");
-      case GameType.Private:
-        return translateText("account_modal.games_type_private");
-      case GameType.Singleplayer:
-        return translateText("account_modal.games_type_singleplayer");
-      default:
-        return translateText("game_info_modal.unknown_game_type");
-    }
+  private gameTypeLabel(gameType?: GameType, visibleAt?: number): string {
+    return formatGameVisibility(gameType, visibleAt);
   }
 
   private renderSummaryTable() {
@@ -410,6 +470,17 @@ export class GameInfoView extends LitElement {
     return this.ranking.score(player, this.rankType);
   }
 
+  // Tells the host which game loaded (null: it failed to), e.g. so the stats
+  // modal can tell how long ago it ended.
+  private announceLoaded(gameId: string, info: GameEndInfo | null): void {
+    this.dispatchEvent(
+      new CustomEvent<GameInfoLoadedDetail>("game-info-loaded", {
+        detail: { gameId, info },
+        bubbles: true,
+      }),
+    );
+  }
+
   private async fetchGame(gameId: string): Promise<void> {
     const generation = ++this.loadGeneration;
     this.isLoadingGame = true;
@@ -425,10 +496,12 @@ export class GameInfoView extends LitElement {
       if (generation !== this.loadGeneration) return;
       if (!session) {
         this.loadFailed = true;
+        this.announceLoaded(gameId, null);
         return;
       }
 
       this.gameInfo = session.info;
+      this.announceLoaded(gameId, session.info);
       this.ranking = new Ranking(session);
       this.updateRanking();
       try {
@@ -441,6 +514,7 @@ export class GameInfoView extends LitElement {
       if (generation === this.loadGeneration) {
         console.warn("Failed to load game:", err);
         this.loadFailed = true;
+        this.announceLoaded(gameId, null);
       }
     } finally {
       if (generation === this.loadGeneration) {

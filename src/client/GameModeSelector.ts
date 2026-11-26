@@ -1,21 +1,22 @@
+import { GameType } from "@openfront/engine-api/game/GameTypes";
 import { html, LitElement, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { GameType } from "../core/game/Game";
 import { getDesktopSessionState } from "./Auth";
-import "./components/IOSAddToHomeScreenBanner";
 import {
   getDesktopUpdateState,
   isDesktopShell,
+  isSteamShell,
   multiplayerAllowed,
   multiplayerAllowedForSession,
   type DesktopSessionState,
   type DesktopUpdateState,
 } from "./DesktopShell";
-import { HostLobbyModal } from "./HostLobbyModal";
+import type { HostLobbyModal } from "./HostLobbyModal";
 import { showInGameAlert } from "./InGameModal";
-import { JoinLobbyModal } from "./JoinLobbyModal";
+import type { JoinLobbyModal } from "./JoinLobbyModal";
+import { whenModalLoaded } from "./LazyModals";
 import { PublicLobbySocket } from "./LobbySocket";
-import { JoinLobbyEvent } from "./Main";
+import type { JoinLobbyEvent } from "./Main";
 import {
   backendUnreachableConfirmed,
   isPinnedToAVersion,
@@ -23,7 +24,7 @@ import {
   retryServerList,
   type BackendReachabilityDetail,
 } from "./ServerList";
-import { SinglePlayerModal } from "./SinglePlayerModal";
+import type { SinglePlayerModal } from "./SinglePlayerModal";
 import { UsernameInput } from "./UsernameInput";
 import {
   getGamesPlayed,
@@ -141,9 +142,7 @@ export function shouldBlockMultiplayerAction(
  * about the game server behind it. The update state is not either -- a
  * pending update is not "offline".
  */
-export function lobbyFeedSuspended(
-  session: DesktopSessionState | null,
-): boolean {
+function lobbyFeedSuspended(session: DesktopSessionState | null): boolean {
   return session !== null && !multiplayerAllowedForSession(session);
 }
 
@@ -298,7 +297,8 @@ export class GameModeSelector extends LitElement {
   // loading into) a lobby. This socket is NOT scoped to the homepage — Main.ts
   // only stops it when a game actually starts (prestart/join), so it is still
   // listening during the whole lobby wait.
-  private inLobby = false;
+  @state() inLobby = false;
+  @state() joiningLobbyId: string | null = null;
   // Whether Main wants the feed open at all (false from game start until the
   // player is back at the menu). Kept apart from the socket's own state so a
   // session change can close and reopen the feed without forgetting that.
@@ -342,7 +342,7 @@ export class GameModeSelector extends LitElement {
       this.updateDeferred = true;
       return;
     }
-    showInGameAlert(translateText("update_available.message")).then(() => {
+    void showInGameAlert(translateText("update_available.message")).then(() => {
       reloadForUpdate();
     });
   }
@@ -369,15 +369,13 @@ export class GameModeSelector extends LitElement {
       "desktop-update-state",
       this.onDesktopUpdateState,
     );
-    if (isDesktopShell()) {
-      // Seed BOTH from their current values. This element is rendered by
-      // <play-page> on a Lit microtask, so it cannot exist yet when the status
-      // bar dispatches the update bridge's synchronous replay -- without the
-      // seed the update half of the gate stays null and silently never
-      // applies (OPE-396).
-      this.desktopUpdateState = getDesktopUpdateState();
-      this.desktopSessionState = getDesktopSessionState();
-    }
+    // Seed BOTH from their current values. This element is rendered by
+    // <play-page> on a Lit microtask, so it cannot exist yet when the status
+    // bar dispatches the update bridge's synchronous replay -- without the
+    // seed the update half of the gate stays null and silently never applies
+    // (OPE-396). The session is the Steam sign-in, so only Steam seeds it.
+    if (isDesktopShell()) this.desktopUpdateState = getDesktopUpdateState();
+    if (isSteamShell()) this.desktopSessionState = getDesktopSessionState();
     // After the session seed above: a shell that already knows it has no
     // session must not open a feed it will close on the next tick.
     this.start();
@@ -396,6 +394,7 @@ export class GameModeSelector extends LitElement {
     );
     document.addEventListener("join-lobby", this.onJoinLobby);
     document.addEventListener("leave-lobby", this.onLeaveLobby);
+    document.addEventListener("menu-restored", this.onLeaveLobby);
     // Pick up the current value in case username-input validated before us.
     const usernameInput = document.querySelector(
       "username-input",
@@ -407,6 +406,8 @@ export class GameModeSelector extends LitElement {
 
   disconnectedCallback() {
     this.stop();
+    this.inLobby = false;
+    this.joiningLobbyId = null;
     window.removeEventListener(
       "username-validity-change",
       this.handleValidityChange,
@@ -425,15 +426,38 @@ export class GameModeSelector extends LitElement {
     );
     document.removeEventListener("join-lobby", this.onJoinLobby);
     document.removeEventListener("leave-lobby", this.onLeaveLobby);
+    document.removeEventListener("menu-restored", this.onLeaveLobby);
     super.disconnectedCallback();
   }
 
-  private onJoinLobby = () => {
+  public resetJoinState(): void {
+    this.inLobby = false;
+    this.joiningLobbyId = null;
+  }
+
+  public releaseRefusedJoin(gameID?: string): void {
+    if (
+      gameID === undefined ||
+      this.joiningLobbyId === gameID ||
+      this.joiningLobbyId === null
+    ) {
+      this.inLobby = false;
+      this.joiningLobbyId = null;
+    }
+  }
+
+  private onJoinLobby = (e?: Event) => {
+    if (e?.defaultPrevented) return;
     this.inLobby = true;
+    const detail = (e as CustomEvent<JoinLobbyEvent>)?.detail;
+    if (detail?.gameID) {
+      this.joiningLobbyId = detail.gameID;
+    }
   };
 
   private onLeaveLobby = () => {
     this.inLobby = false;
+    this.joiningLobbyId = null;
     if (this.updateDeferred) {
       this.updateDeferred = false;
       this.handleUpdateAvailable();
@@ -457,7 +481,7 @@ export class GameModeSelector extends LitElement {
     if (suspended) {
       this.lobbySocket.stop();
     } else {
-      this.lobbySocket.start();
+      void this.lobbySocket.start();
     }
   };
 
@@ -485,19 +509,19 @@ export class GameModeSelector extends LitElement {
    * existing socket before opening a new one.
    */
   public start() {
+    this.inLobby = false;
+    this.joiningLobbyId = null;
     this.feedWanted = true;
     if (lobbyFeedSuspended(this.desktopSessionState)) return;
-    this.lobbySocket.start();
+    void this.lobbySocket.start();
   }
 
   render() {
     return html`
-      <div class="flex flex-col gap-4 w-full px-4 pb-4 mx-auto sm:px-0 sm:pb-0">
-        <ios-add-to-home-screen-banner
-          class="no-crazygames [&:empty]:hidden"
-        ></ios-add-to-home-screen-banner>
-
-        <div class="flex gap-4 h-16">
+      <div
+        class="flex flex-col gap-4 sm:compact:gap-3 w-full px-4 pb-4 mx-auto sm:px-0 sm:pb-0"
+      >
+        <div class="flex gap-4 sm:compact:gap-3 h-16">
           <div class="flex-[2]">
             ${this.renderSmallActionCard(
               translateText("main.solo"),
@@ -505,17 +529,19 @@ export class GameModeSelector extends LitElement {
               PRIMARY_ACTION,
             )}
           </div>
-          ${getGamesPlayed() < TUTORIAL_CARD_MAX_GAMES
-            ? html`<div class="flex-1">
-                ${this.renderSmallActionCard(
-                  translateText("main.tutorial"),
-                  this.startTutorial,
-                  TUTORIAL_ACTION,
-                )}
-              </div>`
-            : nothing}
+          ${
+            getGamesPlayed() < TUTORIAL_CARD_MAX_GAMES
+              ? html`<div class="flex-1">
+                  ${this.renderSmallActionCard(
+                    translateText("main.tutorial"),
+                    this.startTutorial,
+                    TUTORIAL_ACTION,
+                  )}
+                </div>`
+              : nothing
+          }
         </div>
-        <div class="grid grid-cols-2 gap-4 h-16">
+        <div class="grid grid-cols-2 gap-4 sm:compact:gap-3 h-16">
           ${this.renderSmallActionCard(
             translateText("main.create"),
             this.openHostLobby,
@@ -561,28 +587,41 @@ export class GameModeSelector extends LitElement {
   }
 
   private openSinglePlayerModal = () => {
+    if (this.inLobby) return;
     if (!this.validateUsername()) return;
-    (
-      document.querySelector("single-player-modal") as SinglePlayerModal
-    )?.open();
+    whenModalLoaded("single-player-modal", () => {
+      if (this.inLobby) return;
+      (
+        document.querySelector("single-player-modal") as SinglePlayerModal
+      )?.open();
+    });
   };
 
   // Handled in Main, which also serves the help page's tutorial button.
   private startTutorial = () => {
+    if (this.inLobby) return;
     if (!this.validateUsername()) return;
     document.dispatchEvent(new CustomEvent("start-tutorial"));
   };
 
   private openHostLobby = () => {
+    if (this.inLobby) return;
     if (this.blockedFromApiAction()) return;
     if (!this.validateUsername()) return;
-    (document.querySelector("host-lobby-modal") as HostLobbyModal)?.open();
+    whenModalLoaded("host-lobby-modal", () => {
+      if (this.inLobby) return;
+      (document.querySelector("host-lobby-modal") as HostLobbyModal)?.open();
+    });
   };
 
   private openJoinLobby = () => {
+    if (this.inLobby) return;
     if (this.blockedFromApiAction()) return;
     if (!this.validateUsername()) return;
-    (document.querySelector("join-lobby-modal") as JoinLobbyModal)?.open();
+    whenModalLoaded("join-lobby-modal", () => {
+      if (this.inLobby) return;
+      (document.querySelector("join-lobby-modal") as JoinLobbyModal)?.open();
+    });
   };
 
   private renderSmallActionCard(
@@ -601,17 +640,15 @@ export class GameModeSelector extends LitElement {
         this.desktopSessionState,
         this.backendOutage,
       );
+    const disabled = !this.inputValid || this.inLobby;
     return html`
       <button
         @click=${onClick}
-        ?disabled=${!this.inputValid}
-        aria-disabled=${blocked}
-        class="relative flex items-center justify-center w-full h-full rounded-lg ${bgClass} transition-all duration-200 text-sm lg:text-base font-medium text-white uppercase tracking-wider text-center ${!this
-          .inputValid
-          ? DISABLED
-          : blocked
-            ? "opacity-50 cursor-not-allowed"
-            : ""}"
+        ?disabled=${disabled}
+        aria-disabled=${blocked || this.inLobby}
+        class="relative flex items-center justify-center w-full h-full rounded-lg ${bgClass} transition-all duration-200 text-sm lg:text-base font-medium text-white uppercase tracking-wider text-center ${
+          disabled ? DISABLED : blocked ? "opacity-50 cursor-not-allowed" : ""
+        }"
       >
         ${title}
       </button>

@@ -1,8 +1,8 @@
+import { assetUrl } from "@openfront/shared/AssetUrls";
 import { html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { translateText } from "../client/Utils";
-import { assetUrl } from "../core/AssetUrls";
-import { BaseModal } from "./components/BaseModal";
+import { BaseModal, type ModalConfig } from "./components/BaseModal";
 import { modalHeader } from "./components/ui/ModalHeader";
 import { renderMarkdown } from "./Markdown";
 import { normalizeNewsMarkdown } from "./NewsMarkdown";
@@ -14,6 +14,10 @@ export class NewsModal extends BaseModal {
   @property({ type: String }) markdown = "Loading...";
 
   private initialized = false;
+
+  protected modalConfig(): ModalConfig {
+    return { maxWidth: "800px" };
+  }
 
   protected renderHeaderSlot() {
     return modalHeader({

@@ -389,4 +389,12 @@ describe("RenderHtml environment-only render", () => {
     expect(config.instanceLetter).toBe("a");
     expect(config.serverHost).toBe("blue.openfront.io");
   });
+
+  // openfront-light: the SEO tags (canonical, Open Graph, JSON-LD) are removed.
+  it("renders no SEO tags", async () => {
+    const html = await renderHtmlContent(REAL_TEMPLATE);
+    expect(html).not.toContain("application/ld+json");
+    expect(html).not.toContain('rel="canonical"');
+    expect(html).not.toContain("og:image");
+  });
 });

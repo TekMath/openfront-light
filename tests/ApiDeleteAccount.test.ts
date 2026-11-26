@@ -1,9 +1,11 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/client/Auth", () => ({
   logOut: async () => true,
   userAuth: async () => null,
   isSessionActive: () => false,
+  isOtherSession: () => false,
   getPlayToken: async () => "token",
   getAuthHeader: async () => "",
 }));

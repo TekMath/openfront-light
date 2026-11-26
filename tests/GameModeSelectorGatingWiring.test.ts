@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientEnv } from "../src/client/ClientEnv";
 import type { DesktopUpdateState } from "../src/client/DesktopShell";
@@ -10,6 +11,12 @@ vi.mock("../src/client/LobbySocket", () => ({
     start(): void {}
     stop(): void {}
   },
+}));
+
+// The lobby modals load on demand; the stubs below stand in for loaded ones.
+vi.mock("../src/client/LazyModals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/client/LazyModals")>()),
+  whenModalLoaded: (_tag: string, open: () => void) => open(),
 }));
 
 // Registers <game-mode-selector> as a side effect.

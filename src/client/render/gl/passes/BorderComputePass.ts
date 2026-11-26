@@ -75,6 +75,7 @@ export class BorderComputePass {
       gl,
       fullscreenNoUvVertSrc,
       shaderSrc(borderComputeFragSrc, { ...TILE_DEFINES }),
+      "BorderComputePass",
     );
 
     this.uMapSize = gl.getUniformLocation(this.program, "uMapSize")!;
@@ -150,8 +151,15 @@ export class BorderComputePass {
   setHighlightOwner(ownerID: number): void {
     if (ownerID === this.highlightOwner) return;
     this.highlightOwner = ownerID;
-    this.scatter.setHighlightOwner(ownerID);
-    this.globalDirty = true;
+    const isLargeMap = this.mapW * this.mapH > 40_000_000;
+    // On massive maps (e.g. World 10000 with 50M tiles), triggering a full
+    // 50MP FBO recomputation on mouse hover drops the frame rate to single digits.
+    // We pass 0 so the FBO never bakes the highlight; BorderStampPass handles
+    // highlight border rendering dynamically via uniform.
+    this.scatter.setHighlightOwner(isLargeMap ? 0 : ownerID);
+    if (!isLargeMap) {
+      this.globalDirty = true;
+    }
   }
 
   /**
@@ -197,7 +205,11 @@ export class BorderComputePass {
    */
   patchTile(x: number, y: number, prevOwner: number, newOwner: number): void {
     if (this.globalDirty) return;
-    if (this.scatter.count > 2048) {
+    const maxScatter = Math.min(
+      32768,
+      Math.max(2048, Math.floor((this.mapW * this.mapH) / 1000)),
+    );
+    if (this.scatter.count > maxScatter) {
       this.globalDirty = true;
       this.scatter.clear();
       return;
@@ -235,7 +247,8 @@ export class BorderComputePass {
 
       gl.useProgram(this.program);
       gl.uniform2f(this.uMapSize, this.mapW, this.mapH);
-      gl.uniform1ui(this.uHighlightOwner, this.highlightOwner);
+      const isLargeMap = this.mapW * this.mapH > 40_000_000;
+      gl.uniform1ui(this.uHighlightOwner, isLargeMap ? 0 : this.highlightOwner);
       gl.uniform1i(this.uHighlightThicken, Math.floor(mo.highlightThicken));
 
       gl.activeTexture(gl.TEXTURE0);
@@ -245,6 +258,7 @@ export class BorderComputePass {
 
       gl.bindVertexArray(this.vao);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     } else if (this.scatter.count > 0) {
       this.scatter.flush();
     }

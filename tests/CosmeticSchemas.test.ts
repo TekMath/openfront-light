@@ -14,12 +14,12 @@ import {
   NukeExplosionAttributesSchema,
   SubscriptionSchema,
   TrailEffectAttributesSchema,
-} from "../src/core/CosmeticSchemas";
+} from "@openfront/shared/CosmeticSchemas";
 import {
   PlayerCosmeticRefsSchema,
   PlayerCosmeticsSchema,
   PlayerEffectSchema,
-} from "../src/core/Schemas";
+} from "@openfront/shared/WireSchemas";
 
 describe("Effect cosmetic schemas", () => {
   const base = {
@@ -1204,8 +1204,8 @@ describe("SubscriptionSchema unlimitedRanked", () => {
     canCreatePublicLobbies: false,
   };
 
-  it("rejects a tier without unlimitedRanked", () => {
-    expect(SubscriptionSchema.safeParse(base).success).toBe(false);
+  it("accepts a tier without unlimitedRanked", () => {
+    expect(SubscriptionSchema.safeParse(base).success).toBe(true);
   });
 
   it("accepts a tier with unlimitedRanked", () => {
@@ -1388,6 +1388,26 @@ describe("CosmeticsSchema lobbyQueue pricing", () => {
       CosmeticsSchema.safeParse({ patterns: {}, flags: {}, lobbyQueue: {} })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("CosmeticsSchema mapBoost pricing", () => {
+  it("parses the mapBoost config block", () => {
+    const result = CosmeticsSchema.safeParse({
+      patterns: {},
+      flags: {},
+      mapBoost: { priceHard: 3 },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.mapBoost?.priceHard).toBe(3);
+  });
+
+  it("parses a cosmetics.json without mapBoost (older API)", () => {
+    const result = CosmeticsSchema.safeParse({ patterns: {}, flags: {} });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.mapBoost).toBeUndefined();
   });
 });
 

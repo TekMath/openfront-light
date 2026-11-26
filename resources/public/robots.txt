@@ -1,2 +1,3 @@
+# openfront-light: a private self-hosted server, kept out of search engines.
 User-agent: *
-Allow: /
+Disallow: /

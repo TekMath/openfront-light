@@ -38,6 +38,7 @@ const translations = {
   "store.already_owned": "already owned",
   "store.purchase_failed": "failed",
   "store.purchase_success": "bought {name}",
+  "store.purchase_success_charged": "bought {name} for {amount} {currency}",
 };
 
 const pirateFlag: ResolvedCosmetic = {
@@ -211,6 +212,77 @@ describe("purchaseCosmetic when the wallet is in debt", () => {
     expect(showInGameAlert).not.toHaveBeenCalled();
   });
 
+  // The button showed a lower price than the catalog now gives (a sale ended
+  // between render and click): the pre-check and the re-read both judge the
+  // shown price, so a re-read that covers it is not a shortfall of "1 more".
+  it("judges the re-read against the shown price, not the current one", async () => {
+    vi.mocked(purchaseWithCurrency).mockResolvedValue({
+      ok: false,
+      code: "insufficient_balance",
+    });
+    vi.mocked(getUserMe)
+      .mockResolvedValueOnce(userWith(500, 5000))
+      .mockResolvedValueOnce(userWith(70, 5000));
+
+    const result = await purchaseCosmetic(pirateFlag, "hard", undefined, 50);
+
+    expect(result).toBeUndefined();
+    expect(showInGameAlert).toHaveBeenCalledWith("failed");
+  });
+
+  // The button showed the sale price (150) and the sale has since ended (250
+  // now). The shown price still decides whether to send, but a top-up is
+  // quoted from the price now: topping up to the shown price would only end
+  // in price_changed and another shortfall.
+  const endedSaleFlag: ResolvedCosmetic = {
+    ...pirateFlag,
+    cosmetic: {
+      name: "pirate",
+      priceHard: 150,
+      listPriceHard: 250,
+      priceSoft: 400,
+      promotion: {
+        id: "1",
+        name: "Flash",
+        percentOff: 40,
+        endsAt: new Date(Date.now() - 1000).toISOString(),
+      },
+    },
+  } as unknown as ResolvedCosmetic;
+
+  it("quotes the pre-check shortfall from the current price after a sale ends", async () => {
+    vi.mocked(getUserMe).mockResolvedValue(userWith(100, 5000));
+
+    const result = await purchaseCosmetic(
+      endedSaleFlag,
+      "hard",
+      undefined,
+      150,
+    );
+
+    expect(result).toMatchObject({ shortfall: 150, canTopUp: true });
+    expect(purchaseWithCurrency).not.toHaveBeenCalled();
+  });
+
+  it("quotes the re-read shortfall from the current price after a sale ends", async () => {
+    vi.mocked(purchaseWithCurrency).mockResolvedValue({
+      ok: false,
+      code: "insufficient_balance",
+    });
+    vi.mocked(getUserMe)
+      .mockResolvedValueOnce(userWith(500, 5000))
+      .mockResolvedValueOnce(userWith(100, 5000));
+
+    const result = await purchaseCosmetic(
+      endedSaleFlag,
+      "hard",
+      undefined,
+      150,
+    );
+
+    expect(result).toMatchObject({ shortfall: 150, canTopUp: true });
+  });
+
   // Caps cannot be bought, so the dialog must not offer a top-up for them.
   it("does not offer a top-up for a soft-currency shortfall", async () => {
     vi.mocked(purchaseWithCurrency).mockResolvedValue({
@@ -302,6 +374,33 @@ describe("purchaseCosmetic when the wallet is in debt", () => {
     expect(reloadMock).not.toHaveBeenCalled();
   });
 
+  it("says what was charged when it isn't the price shown", async () => {
+    // The card showed 100 plutonium; a flash slot turned over before the
+    // request landed and the server charged the list price.
+    vi.mocked(purchaseWithCurrency).mockResolvedValue({
+      ok: true,
+      amount: 200,
+    });
+
+    await purchaseCosmetic(pirateFlag, "hard");
+
+    expect(showInGameAlert).toHaveBeenCalledWith(
+      "bought pirate for 200 plutonium",
+    );
+    expect(reloadMock).toHaveBeenCalled();
+  });
+
+  it("keeps the plain success message when the charge matches", async () => {
+    vi.mocked(purchaseWithCurrency).mockResolvedValue({
+      ok: true,
+      amount: 400,
+    });
+
+    await purchaseCosmetic(pirateFlag, "soft");
+
+    expect(showInGameAlert).toHaveBeenCalledWith("bought pirate");
+  });
+
   it("still grants and reloads on success", async () => {
     vi.mocked(purchaseWithCurrency).mockResolvedValue({ ok: true });
 
@@ -312,6 +411,8 @@ describe("purchaseCosmetic when the wallet is in debt", () => {
       "pirate",
       "hard",
       undefined,
+      undefined,
+      { expectedAmount: 100, platform: "web" },
     );
     expect(showInGameAlert).toHaveBeenCalledWith("bought pirate");
     expect(invalidateUserMe).toHaveBeenCalled();
