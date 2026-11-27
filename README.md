@@ -66,8 +66,8 @@ An image is published with a curated map selection:
 ghcr.io/tekmath/openfront-light:latest
 ```
 
-Maps included: **World, Giant World Map, Europe, North America, South
-America, Asia, Africa**.
+Maps included: **World, World 4000, World 10000, Europe, North America,
+South America, Asia, Africa**.
 
 Images are published when a version tag is pushed, after lint, tests and the
 other checks pass (see [Releasing](#releasing)). `latest` is the newest stable
@@ -128,10 +128,10 @@ docker build -f Dockerfile.light \
 
 ### Build arguments
 
-| Argument         | Default   | Description                                                                                                                                                                                |
-| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OPENFRONT_MAPS` | empty     | Comma-separated map folder names from [`resources/maps/`](resources/maps) (e.g. `world,giantworldmap,europe`). **Empty embeds every map** (about 600 MB). An unknown name fails the build. |
-| `GIT_COMMIT`     | `unknown` | Version string shown by the client and in `/commit.txt`.                                                                                                                                   |
+| Argument         | Default   | Description                                                                                                                                                                            |
+| ---------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENFRONT_MAPS` | empty     | Comma-separated map folder names from [`resources/maps/`](resources/maps) (e.g. `world,world4000,europe`). **Empty embeds every map** (about 600 MB). An unknown name fails the build. |
+| `GIT_COMMIT`     | `unknown` | Version string shown by the client and in `/commit.txt`.                                                                                                                               |
 
 To list the available map names, run `ls resources/maps`. The map picker, the
 random-map button and the default map only offer the embedded maps. If you
@@ -141,7 +141,7 @@ The prebuilt image uses the following value (the `OPENFRONT_MAPS` repository
 variable overrides it in CI):
 
 ```
-OPENFRONT_MAPS=world,giantworldmap,europe,northamerica,southamerica,asia,africa
+OPENFRONT_MAPS=world,world4000,world10000,europe,northamerica,southamerica,asia,africa
 ```
 
 ## Environment variables

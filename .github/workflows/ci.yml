@@ -141,7 +141,7 @@ jobs:
       # Maps embedded in the published image. Override them with the
       # repository variable OPENFRONT_MAPS (Settings > Secrets and variables >
       # Actions > Variables).
-      OPENFRONT_MAPS: ${{ vars.OPENFRONT_MAPS || 'world,giantworldmap,europe,northamerica,southamerica,asia,africa' }}
+      OPENFRONT_MAPS: ${{ vars.OPENFRONT_MAPS || 'world,world4000,world10000,europe,northamerica,southamerica,asia,africa' }}
       # Only a pushed v* tag publishes. PRs and main just prove the image builds.
       PUSH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     steps:

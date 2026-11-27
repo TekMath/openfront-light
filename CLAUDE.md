@@ -121,6 +121,11 @@ Every background call to the absent API failed and logged, on every start or eve
 - **No game-portal script gating**: upstream's inline `__onPoki` / `__onViverse` / `__loadThirdPartyScript` scripts in `index.html` (they keep third-party scripts out of the Poki and VIVERSE iframes) are removed; the CrazyGames SDK is a plain `<script async>` again. The client's own portal detection (`src/client/poki/`, `ViverseSDK.ts`) is unchanged.
 - **CI (entry 8)**: the format job runs `npm run format:check` (Oxfmt), the typecheck job runs `npm run typecheck` (root + every package), and the gen-maps job no longer sets up Go.
 
+#### 13. Prebuilt maps: World 4000 and World 10000 instead of Giant World Map
+
+- **Why**: upstream now marks Giant World Map `hidden` (`Maps.gen.ts`), so `listedMaps` leaves it out and the map picker never offered it: the prebuilt image and tarball carried 10 MB nobody could select. Upstream added two big world maps, World 4000 and World 10000.
+- **Change**: the default `OPENFRONT_MAPS` of `.github/workflows/ci.yml` (used when the repository variable is unset) is now `world,world4000,world10000,europe,northamerica,southamerica,asia,africa`. World 10000 alone adds about 80 MB to the image and the tarball. `README.md` lists the new set.
+
 #### Known remaining upstream behaviour
 
 - Other API-backed features (store, clans, account pages, ...) still call the API when a player opens them through a `#modal=` deep link; they are not linked from the menu (see 3).
@@ -405,7 +410,7 @@ Some shell blocks are delimited with `BEGIN ... (tested)` / `END` markers and ex
 
 openfront-light keeps a single workflow (see changelog entry 8):
 
-- `ci.yml`: lint (`lint:github`), format check (Oxfmt), tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). The same tag creates a GitHub release with the prebuilt tarball (`openfront-light-<tag>.tar.gz` + `.sha256`, changelog entry 9). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,giantworldmap,europe,northamerica,southamerica,asia,africa`).
+- `ci.yml`: lint (`lint:github`), format check (Oxfmt), tests (`test:coverage`), typecheck + server bundle (`build-server-light`) and the "generated maps up to date" check, then the `image` job builds `Dockerfile.light`. The image is pushed to `ghcr.io/<owner>/openfront-light` only when a `v*` tag is pushed: it gets that tag, plus `latest` unless the tag is a pre-release (contains `-`). The same tag creates a GitHub release with the prebuilt tarball (`openfront-light-<tag>.tar.gz` + `.sha256`, changelog entry 9). On PRs and `main` it is only built. The embedded maps come from the repository variable `OPENFRONT_MAPS` (default: `world,world4000,world10000,europe,northamerica,southamerica,asia,africa`).
 
 Upstream's `deploy.yml`, `release.yml` and PR / issue bot workflows target openfront.io infrastructure and are not used here.
 
